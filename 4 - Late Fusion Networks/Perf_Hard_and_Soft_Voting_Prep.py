@@ -4,19 +4,30 @@ import librosa
 import tensorflow as tf
 import numpy as np
 from termcolor import colored
+import sys
+from pathlib import Path
+import warnings
+
+# Suppress librosa warnings
+warnings.filterwarnings('ignore', message='n_fft=.*is too large for input signal of length=.*')
+
+# Import centralized configuration
+sys.path.insert(0, str(Path(__file__).parent.parent))
+import config
 
 # Read and save parameters.
-DATASET_PATH = "Unseen Testing"  # Path of testing dataset.
+DATASET_PATH = config.DATASET_ROOT_STR  # Path of testing dataset
 SAMPLE_RATE = 22050
-DURATION = 1  # Measured in seconds (change depending on length of one audio file).
+DURATION = 10  # Measured in seconds - MUST MATCH TRAINING!
 SAMPLES_PER_TRACK = SAMPLE_RATE * DURATION
 
-# Model testing.
-SAVED_MODEL = ".../model_1.h5"  # Path of trained model (change for all models trained).
+# Model testing - Change model_index (1-10) for each voting model
+model_index = 1  # CHANGE THIS FOR EACH MODEL (1 to 10)
+SAVED_MODEL = config.get_path_str(config.ENSEMBLE_MODEL_PATHS[model_index])
 # Raw predictions: 1, 0 results (for hard voting) and certainty values (for soft voting).
-RESULTS = ".../voted_1.json"  # Path to save raw predictions.
+RESULTS = config.get_path_str(config.VOTED_PATHS[model_index])  # Path to save raw predictions.
 # Performance scores (accuracy, precision, recall, f-score).
-MODEL_SCORES = ".../scores_1.json"
+MODEL_SCORES = config.get_path_str(config.SCORES_PATHS[model_index])
 
 
 # Prediction of fed audio.
@@ -69,7 +80,7 @@ class _Class_Predict_Service:
         return predict_prob
 
     # Extract mel specs from raw audio.
-    def preprocess(self, file_path, n_mels=90, n_fft=2048, hop_length=512, num_segments=1):
+    def preprocess(self, file_path, n_mels=90, n_fft=2048, hop_length=512, num_segments=10):
         """Extract MFCCs from audio file.
         :param file_path (str): Path of audio file
         :param n_mels (int): # of mels to extract
@@ -87,8 +98,13 @@ class _Class_Predict_Service:
             start_sample = num_samples_per_segment * s  # s=0 --> 0
             finish_sample = start_sample + num_samples_per_segment  # s=0 --> num_samples_per_segment
 
+            # Extract segment and pad if too short
+            segment = signal[start_sample:finish_sample]
+            if len(segment) < num_samples_per_segment:
+                segment = np.pad(segment, (0, num_samples_per_segment - len(segment)), mode='constant')
+
             # Extract mel specs.
-            mel = librosa.feature.melspectrogram(signal[start_sample:finish_sample], sr=sr, n_mels=n_mels, n_fft=n_fft,
+            mel = librosa.feature.melspectrogram(y=segment, sr=sr, n_mels=n_mels, n_fft=n_fft,
                                                  hop_length=hop_length)
             db_mel = librosa.power_to_db(mel)
 

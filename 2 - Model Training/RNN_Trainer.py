@@ -5,19 +5,25 @@ import tensorflow.keras as keras
 import pandas as pd
 from datetime import datetime
 from termcolor import colored
+import sys
+from pathlib import Path
+
+# Add project root to path to import config
+sys.path.insert(0, str(Path(__file__).parent.parent))
+import config
 
 # Timer.
 startTime = datetime.now()
 
 # Path to created json file from mel preprocess and feature extraction script.
-DATA_PATH = ".../mel_pitch_shift_9.0.json"
+DATA_PATH = config.MEL_TRAIN_PATH_STR
 
 # Path to save model.
-MODEL_SAVE = '.../model_1.h5'
+MODEL_SAVE = config.RNN_MODEL_PATH_STR
 
 # Path to save training history and model accuracy performance at end of training.
-HISTORY_SAVE = ".../history_1.csv"
-ACC_SAVE = ".../models_acc_1.json"
+HISTORY_SAVE = config.RNN_HISTORY_PATH_STR
+ACC_SAVE = config.RNN_ACC_PATH_STR
 
 def load_data(data_path):
     """Loads training dataset from json file.

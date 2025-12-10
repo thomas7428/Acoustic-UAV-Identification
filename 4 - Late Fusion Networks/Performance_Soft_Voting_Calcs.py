@@ -2,27 +2,32 @@ from termcolor import colored
 import numpy as np
 import json
 import sys
+from pathlib import Path
+
+# Import centralized configuration
+sys.path.insert(0, str(Path(__file__).parent.parent))
+import config
 
 # Soft Voting Section.
 
 # Output results (storing voting model performance results).
-RESULTS = ".../voted_results.json"
-JSON_WEIGHTS = ".../weights.json"  # Weights used to make weighted predictions (created during script run).
-VOTED_MODELS_SCORES = ".../FINAL_SCORES.json"  # Soft voting performance scores output.
+RESULTS = config.VOTED_RESULTS_PATH_STR
+JSON_WEIGHTS = config.VOTING_WEIGHTS_PATH_STR  # Weights used to make weighted predictions (created during script run).
+VOTED_MODELS_SCORES = config.VOTING_FINAL_SCORES_PATH_STR  # Soft voting performance scores output.
 
 # json files with model confidence results (10 models).
-cert_1 = ".../voted_1.json"
-cert_2 = ".../voted_2.json"
-cert_3 = ".../voted_3.json"
-cert_4 = ".../voted_4.json"
-cert_5 = ".../voted_5.json"
-cert_6 = ".../voted_6.json"
-cert_7 = ".../voted_7.json"
-cert_8 = ".../voted_8.json"
-cert_9 = ".../voted_9.json"
-cert_10 = ".../voted_10.json"
+cert_1 = config.get_path_str(config.VOTED_PATHS[1])
+cert_2 = config.get_path_str(config.VOTED_PATHS[2])
+cert_3 = config.get_path_str(config.VOTED_PATHS[3])
+cert_4 = config.get_path_str(config.VOTED_PATHS[4])
+cert_5 = config.get_path_str(config.VOTED_PATHS[5])
+cert_6 = config.get_path_str(config.VOTED_PATHS[6])
+cert_7 = config.get_path_str(config.VOTED_PATHS[7])
+cert_8 = config.get_path_str(config.VOTED_PATHS[8])
+cert_9 = config.get_path_str(config.VOTED_PATHS[9])
+cert_10 = config.get_path_str(config.VOTED_PATHS[10])
 
-Accuracy = ".../all_models_acc.json"  # Accuracy results from Validation 2 subset test (to calculate weights).
+Accuracy = config.ALL_MODEL_ACC_PATH_STR  # Accuracy results from Validation 2 subset test (to calculate weights).
 
 
 # Calculating weights of each voting model.

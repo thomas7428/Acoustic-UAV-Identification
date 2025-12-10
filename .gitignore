@@ -1,0 +1,95 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# OS
+.DS_Store
+Thumbs.db
+
+# ====================================
+# PROJECT SPECIFIC - Large Data Files
+# ====================================
+
+# Datasets (Audio files can be very large)
+0 - DADS dataset extraction/dataset_test/
+0 - DADS dataset extraction/dataset_augmented/
+0 - DADS dataset extraction/dataset_combined/
+0 - DADS dataset extraction/*.wav
+0 - DADS dataset extraction/*.mp3
+
+# Extracted Features (Can be regenerated)
+extracted_features/
+*.pkl
+*.pickle
+*.npy
+*.npz
+
+# Trained Models (Can be retrained)
+models/
+*.h5
+*.keras
+*.hdf5
+*.pt
+*.pth
+*.ckpt
+*.pb
+
+# Training History and Logs
+results/
+logs/
+*.log
+training_history.csv
+*_history.csv
+*_accuracy.json
+
+# Visualizations Output (Can be regenerated)
+6 - Visualization/outputs/
+*.png
+*.jpg
+*.jpeg
+*.pdf
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
+
+# Large JSON metadata (if needed, can be versioned separately)
+*_metadata.json
+augmentation_metadata.json

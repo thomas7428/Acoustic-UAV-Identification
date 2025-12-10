@@ -2,9 +2,24 @@ import os
 import librosa
 import math
 import json
+import warnings
+import numpy as np
 
-DATASET_PATH = "..."  # Path of folder with training audios.
-JSON_PATH = ".../mfcc_data.json"  # Location and file name to save feature extracted data.
+# Suppress the librosa warning about n_fft being too large
+warnings.filterwarnings('ignore', message='n_fft=.*is too large for input signal of length=.*')
+
+# Import configuration from centralized config
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+try:
+    import config
+    DATASET_PATH = config.DATASET_ROOT_STR
+    JSON_PATH = config.MFCC_TRAIN_PATH_STR
+except ImportError:
+    # Fallback to manual paths if config doesn't exist
+    DATASET_PATH = "..."  # Path of folder with training audios.
+    JSON_PATH = ".../mfcc_data.json"  # Location and file name to save feature extracted data.
 
 SAMPLE_RATE = 22050  # Sample rate in Hz.
 DURATION = 10  # Length of audio files fed. Measured in seconds.
@@ -31,7 +46,7 @@ def save_mfcc(dataset_path, json_path, n_mfcc=20, n_fft=2048, hop_length=512, nu
         if dirpath is not dataset_path:
 
             # Saves the semantic label for the mapping.
-            dirpath_components = dirpath.split("/")     # class/background => ["class", "background"]
+            dirpath_components = dirpath.split(os.sep)     # class/background => ["class", "background"]
             semantic_label = dirpath_components[-1]     # considering only the last value
             data["mapping"].append(semantic_label)
             print("\nProcessing {}".format(semantic_label))
@@ -48,7 +63,14 @@ def save_mfcc(dataset_path, json_path, n_mfcc=20, n_fft=2048, hop_length=512, nu
                     start_sample = num_samples_per_segment * s # s=0 --> 0
                     finish_sample = start_sample + num_samples_per_segment # s=0 --> num_samples_per_segment
 
-                    mfcc = librosa.feature.mfcc(signal[start_sample:finish_sample],
+                    # Extract segment and pad if necessary
+                    segment = signal[start_sample:finish_sample]
+                    
+                    # Pad segment with zeros if it's shorter than expected
+                    if len(segment) < num_samples_per_segment:
+                        segment = np.pad(segment, (0, num_samples_per_segment - len(segment)), mode='constant')
+
+                    mfcc = librosa.feature.mfcc(y=segment,
                                                 sr=sr,
                                                 n_fft=n_fft,
                                                 n_mfcc=n_mfcc,
