@@ -4,7 +4,7 @@
   "augmented_categories": [
     {
       "name": "drone_very_far",
-      "proportion": 0.15,
+      "proportion": 0.35,
       "snr_db": -15,
       "num_background_noises": 3,
       "label": 1,
@@ -12,7 +12,7 @@
     },
     {
       "name": "drone_far",
-      "proportion": 0.20,
+      "proportion": 0.30,
       "snr_db": -10,
       "num_background_noises": 2,
       "label": 1,
@@ -20,7 +20,7 @@
     },
     {
       "name": "drone_medium",
-      "proportion": 0.25,
+      "proportion": 0.20,
       "snr_db": -5,
       "num_background_noises": 2,
       "label": 1,
@@ -28,7 +28,7 @@
     },
     {
       "name": "drone_close",
-      "proportion": 0.20,
+      "proportion": 0.10,
       "snr_db": 0,
       "num_background_noises": 1,
       "label": 1,
@@ -36,7 +36,7 @@
     },
     {
       "name": "drone_very_close",
-      "proportion": 0.20,
+      "proportion": 0.05,
       "snr_db": 5,
       "num_background_noises": 1,
       "label": 1,

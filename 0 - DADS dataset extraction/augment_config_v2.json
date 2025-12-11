@@ -1,0 +1,129 @@
+{
+  "description": "Enhanced configuration for dataset augmentation - supports both drone and no-drone augmentation",
+  "version": "2.0",
+  
+  "drone_augmentation": {
+    "enabled": true,
+    "categories": [
+      {
+        "name": "drone_very_far",
+        "proportion": 0.35,
+        "snr_db": -15,
+        "num_background_noises": 3,
+        "label": 1,
+        "description": "Drone très distant (quasi inaudible) avec multiples bruits de fond"
+      },
+      {
+        "name": "drone_far",
+        "proportion": 0.30,
+        "snr_db": -10,
+        "num_background_noises": 2,
+        "label": 1,
+        "description": "Drone distant avec bruit ambiant modéré"
+      },
+      {
+        "name": "drone_medium",
+        "proportion": 0.20,
+        "snr_db": -5,
+        "num_background_noises": 2,
+        "label": 1,
+        "description": "Drone à distance moyenne avec léger bruit"
+      },
+      {
+        "name": "drone_close",
+        "proportion": 0.10,
+        "snr_db": 0,
+        "num_background_noises": 1,
+        "label": 1,
+        "description": "Drone proche avec bruit de fond minimal"
+      },
+      {
+        "name": "drone_very_close",
+        "proportion": 0.05,
+        "snr_db": 5,
+        "num_background_noises": 1,
+        "label": 1,
+        "description": "Drone très proche dominant le bruit de fond"
+      }
+    ]
+  },
+  
+  "no_drone_augmentation": {
+    "enabled": true,
+    "categories": [
+      {
+        "name": "ambient_complex",
+        "proportion": 0.40,
+        "num_noise_sources": 3,
+        "amplitude_range": [0.6, 1.0],
+        "enable_pitch_shift": true,
+        "pitch_shift_range": [-2, 2],
+        "enable_time_stretch": true,
+        "time_stretch_range": [0.9, 1.1],
+        "label": 0,
+        "description": "Ambiance complexe avec plusieurs sources sonores mélangées"
+      },
+      {
+        "name": "ambient_moderate",
+        "proportion": 0.30,
+        "num_noise_sources": 2,
+        "amplitude_range": [0.5, 0.9],
+        "enable_pitch_shift": true,
+        "pitch_shift_range": [-1, 1],
+        "enable_time_stretch": false,
+        "label": 0,
+        "description": "Ambiance modérée avec 2 sources combinées"
+      },
+      {
+        "name": "ambient_simple",
+        "proportion": 0.20,
+        "num_noise_sources": 1,
+        "amplitude_range": [0.4, 0.8],
+        "enable_pitch_shift": true,
+        "pitch_shift_range": [-1, 1],
+        "enable_time_stretch": false,
+        "label": 0,
+        "description": "Ambiance simple avec variations légères"
+      },
+      {
+        "name": "ambient_quiet",
+        "proportion": 0.10,
+        "num_noise_sources": 1,
+        "amplitude_range": [0.3, 0.6],
+        "enable_pitch_shift": false,
+        "enable_time_stretch": false,
+        "label": 0,
+        "description": "Ambiance calme avec niveau sonore réduit"
+      }
+    ]
+  },
+  
+  "audio_parameters": {
+    "sample_rate": 22050,
+    "target_duration_sec": 10,
+    "enable_looping": true,
+    "crossfade_duration_sec": 0.1,
+    "enable_normalization": true,
+    "max_amplitude": 0.95
+  },
+  
+  "output": {
+    "output_dir": "dataset_augmented",
+    "samples_per_category_drone": 2000,
+    "samples_per_category_no_drone": 2000,
+    "save_mixing_info": true,
+    "info_filename": "augmentation_metadata.json"
+  },
+  
+  "source_datasets": {
+    "drone_dir": "dataset_test/1",
+    "no_drone_dir": "dataset_test/0"
+  },
+  
+  "advanced": {
+    "random_seed": 42,
+    "enable_random_offset": true,
+    "enable_amplitude_variation": true,
+    "amplitude_variation_db": 2
+  }
+}

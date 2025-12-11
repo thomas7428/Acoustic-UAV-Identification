@@ -148,7 +148,7 @@ def preprocess_audio_for_mfcc(file_path, num_segments=10):
 
 def get_category_files():
     """Get files organized by SNR category."""
-    combined_path = config.PROJECT_ROOT / "0 - DADS dataset extraction" / "dataset_combined" / "1"
+    combined_path = config.PROJECT_ROOT / "0 - DADS dataset extraction" / "dataset_combined"
     
     if not combined_path.exists():
         print("[ERROR] Combined dataset not found")
@@ -163,22 +163,27 @@ def get_category_files():
         'Very Close (+5dB)': []
     }
     
-    # Map filename patterns to categories
-    for file_path in combined_path.glob('*.wav'):
-        filename = file_path.name
-        
-        if 'drone_very_far' in filename:
-            categories['Very Far (-15dB)'].append(file_path)
-        elif 'drone_far' in filename and 'very_far' not in filename:
-            categories['Far (-10dB)'].append(file_path)
-        elif 'drone_medium' in filename:
-            categories['Medium (-5dB)'].append(file_path)
-        elif 'drone_close' in filename and 'very_close' not in filename:
-            categories['Close (0dB)'].append(file_path)
-        elif 'drone_very_close' in filename:
-            categories['Very Close (+5dB)'].append(file_path)
-        elif 'orig_' in filename:
-            categories['Original (Clean)'].append(file_path)
+    # Map filename patterns to categories - search in both 0/ and 1/ subdirectories
+    for subfolder in ['0', '1']:
+        subfolder_path = combined_path / subfolder
+        if not subfolder_path.exists():
+            continue
+            
+        for file_path in subfolder_path.glob('*.wav'):
+            filename = file_path.name
+            
+            if 'drone_very_far' in filename:
+                categories['Very Far (-15dB)'].append(file_path)
+            elif 'drone_far' in filename and 'very_far' not in filename:
+                categories['Far (-10dB)'].append(file_path)
+            elif 'drone_medium' in filename:
+                categories['Medium (-5dB)'].append(file_path)
+            elif 'drone_close' in filename and 'very_close' not in filename:
+                categories['Close (0dB)'].append(file_path)
+            elif 'drone_very_close' in filename:
+                categories['Very Close (+5dB)'].append(file_path)
+            elif 'orig_' in filename:
+                categories['Original (Clean)'].append(file_path)
     
     # Filter out empty categories
     categories = {k: v for k, v in categories.items() if v}
@@ -200,21 +205,38 @@ def evaluate_model_on_category(model, model_name, files, feature_type='mel'):
     
     for file_path in files:
         try:
+            # Extract true label from parent directory name
+            # Files are in dataset_combined/0/ (no-drone) or dataset_combined/1/ (drone)
+            true_label = int(file_path.parent.name)
+            
             # Preprocess
             features = preprocess_func(file_path)
             
             if len(features) == 0:
                 continue
             
+            # Reshape for model input
+            # For CNN/CRNN (mel): (segments, time_steps, features) -> (segments, time_steps, features, 1)
+            # For RNN (mfcc): (segments, time_steps, features) -> (segments, time_steps, features)
+            if feature_type == 'mel':
+                features = features[..., np.newaxis]  # Add channel dimension
+            
             # Predict
             pred = model.predict(features, verbose=0)
             
             # Average predictions across segments
             avg_pred = np.mean(pred, axis=0)
-            pred_label = 1 if avg_pred[0] > 0.5 else 0
+            
+            # Debug first few predictions
+            if len(predictions) < 3:
+                print(f"\n  [DEBUG] File: {file_path.name}, True label: {true_label}")
+                print(f"  [DEBUG] avg_pred: {avg_pred}, pred_label: {np.argmax(avg_pred)}")
+            
+            # Handle different output formats (softmax with 2 outputs)
+            pred_label = np.argmax(avg_pred)
             
             predictions.append(pred_label)
-            labels.append(1)  # True label is drone
+            labels.append(true_label)
             
         except Exception as e:
             print(f"\n[WARNING] Error processing {file_path.name}: {e}")
@@ -224,13 +246,19 @@ def evaluate_model_on_category(model, model_name, files, feature_type='mel'):
         print("No valid predictions")
         return None
     
+    # Debug: Show prediction distribution
+    pred_array = np.array(predictions)
+    label_array = np.array(labels)
+    print(f"\n  [DEBUG] Predictions: {np.sum(pred_array == 0)} no-drones, {np.sum(pred_array == 1)} drones")
+    print(f"  [DEBUG] True labels: {np.sum(label_array == 0)} no-drones, {np.sum(label_array == 1)} drones")
+    
     # Calculate metrics
     accuracy = accuracy_score(labels, predictions)
     precision, recall, f1, _ = precision_recall_fscore_support(labels, predictions, 
                                                                 average='binary', 
                                                                 zero_division=0)
     
-    print(f"Accuracy: {accuracy*100:.1f}%")
+    print(f"  Accuracy: {accuracy*100:.1f}%, Recall: {recall*100:.1f}%, Precision: {precision*100:.1f}%")
     
     return {
         'accuracy': accuracy,
@@ -267,8 +295,8 @@ def test_models_by_distance():
         print(f"\nTesting {model_name}:")
         print("-" * 60)
         
-        # Determine feature type
-        feature_type = 'mfcc' if model_name == 'RNN' else 'mel'
+        # All models use mel spectrograms in this project
+        feature_type = 'mel'
         
         for cat_name, files in categories.items():
             print(f"{cat_name:20s} ({len(files):3d} files): ", end='')
