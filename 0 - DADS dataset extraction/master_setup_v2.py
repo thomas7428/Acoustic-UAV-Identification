@@ -345,7 +345,7 @@ def step_6_summary(script_dir):
     key_files = [
         ("split_info.json", "Dataset split details and verification"),
         ("dataset_augmented/augmentation_metadata.json", "Augmentation metadata"),
-        ("extracted_features/mel_data.json", "Extracted Mel features")
+        ("extracted_features/mel_pitch_shift_9.0.json", "Extracted Mel features")
     ]
     
     for filename, description in key_files:

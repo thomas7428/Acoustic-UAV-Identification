@@ -17,15 +17,15 @@ import config
 
 # Read and save parameters.
 DATASET_PATH = config.DATASET_ROOT_STR  # Path of folder with testing audios
-SAVED_MODEL_PATH = config.CNN_MODEL_PATH_STR  # Path of trained model (change to CRNN_MODEL_PATH_STR for CRNN)
+SAVED_MODEL_PATH = config.CRNN_MODEL_PATH_STR  # Path of trained model
 SAMPLE_RATE = 22050  # Sample rate in Hz.
 DURATION = 10  # Length of audio files fed. Measured in seconds. MUST MATCH TRAINING!
 SAMPLES_PER_TRACK = SAMPLE_RATE * DURATION
 
 # Predictions (1 or 0)
-JSON_PATH = config.CNN_PREDICTIONS_PATH_STR  # Change to CRNN_PREDICTIONS_PATH_STR for CRNN
+JSON_PATH = config.CRNN_PREDICTIONS_PATH_STR  # CRNN predictions path
 # Performance scores (accuracy, precision, recall, f1 score)
-JSON_PERFORMANCE = config.CNN_SCORES_PATH_STR  # Change to CRNN_SCORES_PATH_STR for CRNN
+JSON_PERFORMANCE = config.CRNN_SCORES_PATH_STR  # CRNN scores path
 
 # Prediction of fed audio
 class _Class_Predict_Service:

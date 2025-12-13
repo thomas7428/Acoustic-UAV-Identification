@@ -47,22 +47,22 @@ def plot_snr_performance():
     if metadata is None:
         return None
     
-    # Get categories info
-    categories_info = metadata.get('config', {}).get('augmented_categories', [])
+    # Get categories info from config
+    drone_categories = metadata.get('config', {}).get('drone_augmentation', {}).get('categories', [])
     
-    if not categories_info:
+    if not drone_categories:
         print("[WARNING] No category information in metadata")
         return None
     
     # Create plot
     fig, ax = plt.subplots(figsize=(12, 6))
     
-    categories = [cat['name'] for cat in categories_info]
-    snr_values = [cat['snr_db'] for cat in categories_info]
-    descriptions = [cat['description'] for cat in categories_info]
+    categories = [cat['name'] for cat in drone_categories]
+    snr_values = [cat['snr_db'] for cat in drone_categories]
+    descriptions = [cat['description'] for cat in drone_categories]
     
     # Get actual achieved SNR from statistics
-    stats = metadata.get('statistics', {}).get('categories', {})
+    stats = metadata.get('statistics', {}).get('drone_augmentation', {}).get('categories', {})
     achieved_snr = [stats.get(cat, {}).get('avg_snr_db', snr) 
                     for cat, snr in zip(categories, snr_values)]
     
@@ -108,21 +108,30 @@ def plot_augmentation_composition():
     if metadata is None:
         return None
     
-    stats = metadata.get('statistics', {}).get('categories', {})
+    # Get both drone and no_drone statistics
+    drone_stats = metadata.get('statistics', {}).get('drone_augmentation', {}).get('categories', {})
+    no_drone_stats = metadata.get('statistics', {}).get('no_drone_augmentation', {}).get('categories', {})
     
-    if not stats:
+    if not drone_stats and not no_drone_stats:
         print("[WARNING] No statistics in metadata")
         return None
     
+    # Combine both for visualization
+    all_stats = {**drone_stats, **no_drone_stats}
+    
     # Extract data
-    categories = list(stats.keys())
-    counts = [stats[cat]['generated'] for cat in categories]
+    categories = list(all_stats.keys())
+    counts = [all_stats[cat]['generated'] for cat in categories]
     colors_map = {
         'drone_very_far': '#e74c3c',
         'drone_far': '#e67e22',
         'drone_medium': '#f39c12',
         'drone_close': '#2ecc71',
-        'drone_very_close': '#27ae60'
+        'drone_very_close': '#27ae60',
+        'ambient_complex': '#3498db',
+        'ambient_moderate': '#5dade2',
+        'ambient_simple': '#85c1e9',
+        'ambient_quiet': '#aed6f1'
     }
     colors = [colors_map.get(cat, 'gray') for cat in categories]
     
@@ -192,12 +201,13 @@ def plot_dataset_evolution():
     # Augmented
     aug_path = base_path / 'dataset_augmented'
     if aug_path.exists():
+        no_drone_aug = len(list((aug_path / '0').glob('*.wav')))
         aug_drone = len(list((aug_path / '1').glob('*.wav')))
         datasets_info.append({
             'Stage': 'Augmented\nDataset',
-            'No Drone': 0,
+            'No Drone': no_drone_aug,
             'Drone': aug_drone,
-            'Total': aug_drone
+            'Total': no_drone_aug + aug_drone
         })
     
     # Combined

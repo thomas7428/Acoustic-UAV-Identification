@@ -1,14 +1,15 @@
 """
-Performance by Distance Analysis
+Performance by Distance Analysis - Dynamic Configuration Version
 Analyzes REAL model performance as a function of simulated drone distance (SNR categories).
 
 This script:
-1. Loads trained models (CNN, RNN, CRNN)
-2. Tests them on each augmentation category separately
+1. Dynamically loads augmentation categories from augment_config_v2.json
+2. Tests trained models on each category separately
 3. Generates real performance metrics by distance/SNR
-4. Compares how well each model handles different drone distances
+4. Adapts to any future configuration changes
 
 Features:
+- Automatic category detection from config
 - Real accuracy by SNR category
 - Performance degradation analysis
 - Per-model robustness comparison
@@ -52,6 +53,142 @@ plt.rcParams['font.size'] = 10
 SAMPLE_RATE = 22050
 DURATION = 10
 SAMPLES_PER_TRACK = SAMPLE_RATE * DURATION
+
+# Paths
+AUGMENT_CONFIG_PATH = Path(__file__).parent.parent / "0 - DADS dataset extraction" / "augment_config_v2.json"
+DATASET_COMBINED_PATH = Path(__file__).parent.parent / "0 - DADS dataset extraction" / "dataset_combined"
+OUTPUT_DIR = Path(__file__).parent / "outputs"
+
+
+def load_augmentation_config():
+    """Load augmentation configuration to get dynamic categories."""
+    if not AUGMENT_CONFIG_PATH.exists():
+        print(f"[ERROR] Config not found: {AUGMENT_CONFIG_PATH}")
+        return None
+    
+    try:
+        with open(AUGMENT_CONFIG_PATH, 'r') as f:
+            config_data = json.load(f)
+        
+        print(f"[OK] Loaded augmentation config v{config_data.get('version', 'unknown')}")
+        return config_data
+    except Exception as e:
+        print(f"[ERROR] Failed to load config: {e}")
+        return None
+
+
+def get_categories_from_config(aug_config):
+    """
+    Extract category definitions from augmentation config.
+    
+    Returns dict with category info:
+    {
+        'drone_500m': {
+            'name': 'drone_500m',
+            'display_name': '500m (-32dB)',
+            'snr_db': -32,
+            'proportion': 0.40,
+            'description': '...',
+            'label': 1
+        },
+        ...
+    }
+    """
+    if not aug_config:
+        return {}
+    
+    categories = {}
+    
+    # Extract drone augmentation categories
+    if aug_config.get('drone_augmentation', {}).get('enabled'):
+        for cat in aug_config['drone_augmentation']['categories']:
+            name = cat['name']
+            snr = cat['snr_db']
+            
+            # Parse distance from name (e.g., 'drone_500m' -> '500m')
+            distance = name.replace('drone_', '').replace('_', ' ')
+            
+            categories[name] = {
+                'name': name,
+                'display_name': f"{distance} ({snr:+d}dB)".replace('+-', '-'),
+                'snr_db': snr,
+                'proportion': cat.get('proportion', 0),
+                'description': cat.get('description', ''),
+                'label': cat.get('label', 1),
+                'file_pattern': f"aug_{name}_"
+            }
+    
+    # Extract no-drone augmentation categories (if any)
+    if aug_config.get('no_drone_augmentation', {}).get('enabled'):
+        for cat in aug_config['no_drone_augmentation']['categories']:
+            name = cat['name']
+            snr = cat.get('snr_db', 0)
+            
+            categories[name] = {
+                'name': name,
+                'display_name': cat.get('display_name', name),
+                'snr_db': snr,
+                'proportion': cat.get('proportion', 0),
+                'description': cat.get('description', ''),
+                'label': cat.get('label', 0),
+                'file_pattern': f"aug_{name}_"
+            }
+    
+    # Add original clean samples category
+    categories['original_clean'] = {
+        'name': 'original_clean',
+        'display_name': 'Original (Clean)',
+        'snr_db': float('inf'),  # Perfect quality
+        'proportion': 0,
+        'description': 'Original unaugmented samples',
+        'label': None,  # Will contain both classes
+        'file_pattern': 'orig_'
+    }
+    
+    return categories
+
+
+def get_category_files(categories):
+    """
+    Get all audio files for each category from dataset_combined.
+    
+    Returns:
+    {
+        'category_name': {
+            'files': [Path objects],
+            'display_name': 'Display Name',
+            'snr_db': -32,
+            'expected_label': 0 or 1 or None
+        }
+    }
+    """
+    if not DATASET_COMBINED_PATH.exists():
+        print(f"[ERROR] Dataset not found: {DATASET_COMBINED_PATH}")
+        return {}
+    
+    category_files = {}
+    
+    for cat_name, cat_info in categories.items():
+        pattern = cat_info['file_pattern']
+        files = []
+        
+        # Search in both class folders (0 and 1)
+        for class_dir in ['0', '1']:
+            class_path = DATASET_COMBINED_PATH / class_dir
+            if class_path.exists():
+                # Find files matching pattern
+                matching_files = list(class_path.glob(f"{pattern}*.wav"))
+                files.extend(matching_files)
+        
+        if files:
+            category_files[cat_name] = {
+                'files': sorted(files),
+                'display_name': cat_info['display_name'],
+                'snr_db': cat_info['snr_db'],
+                'expected_label': cat_info['label']
+            }
+    
+    return category_files
 
 
 def load_models():
@@ -99,121 +236,57 @@ def preprocess_audio_for_mel(file_path, num_segments=10):
         
         # Pad if necessary
         if len(segment) < num_samples_per_segment:
-            segment = np.pad(segment, (0, num_samples_per_segment - len(segment)), mode='constant')
+            segment = np.pad(segment, (0, num_samples_per_segment - len(segment)))
         
-        mel = librosa.feature.melspectrogram(y=segment, sr=sr, n_fft=n_fft, 
-                                            n_mels=n_mels, hop_length=hop_length)
-        db_mel = librosa.power_to_db(mel)
-        mel_segment = db_mel.T
+        # Compute mel spectrogram
+        mel = librosa.feature.melspectrogram(y=segment, 
+                                            sr=sr,
+                                            n_fft=n_fft,
+                                            hop_length=hop_length,
+                                            n_mels=n_mels)
         
-        if len(mel_segment) == expected_num_vectors:
-            mels.append(mel_segment)
+        # Convert to dB
+        mel = librosa.power_to_db(mel, ref=np.max)
+        
+        # Ensure correct shape
+        if mel.shape[1] < expected_num_vectors:
+            mel = np.pad(mel, ((0, 0), (0, expected_num_vectors - mel.shape[1])), mode='constant')
+        elif mel.shape[1] > expected_num_vectors:
+            mel = mel[:, :expected_num_vectors]
+        
+        mels.append(mel.T)
     
     return np.array(mels)
 
 
-def preprocess_audio_for_mfcc(file_path, num_segments=10):
-    """Preprocess audio file to MFCC format."""
-    n_mfcc = 13
-    n_fft = 2048
-    hop_length = 512
-    
-    # Load audio
-    signal, sr = librosa.load(file_path, sr=SAMPLE_RATE)
-    
-    num_samples_per_segment = int(SAMPLES_PER_TRACK / num_segments)
-    expected_num_vectors = math.ceil(num_samples_per_segment / hop_length)
-    
-    mfccs = []
-    
-    for s in range(num_segments):
-        start_sample = num_samples_per_segment * s
-        finish_sample = start_sample + num_samples_per_segment
-        
-        segment = signal[start_sample:finish_sample]
-        
-        # Pad if necessary
-        if len(segment) < num_samples_per_segment:
-            segment = np.pad(segment, (0, num_samples_per_segment - len(segment)), mode='constant')
-        
-        mfcc = librosa.feature.mfcc(y=segment, sr=sr, n_mfcc=n_mfcc, 
-                                    n_fft=n_fft, hop_length=hop_length)
-        mfcc_segment = mfcc.T
-        
-        if len(mfcc_segment) == expected_num_vectors:
-            mfccs.append(mfcc_segment)
-    
-    return np.array(mfccs)
-
-
-def get_category_files():
-    """Get files organized by SNR category."""
-    combined_path = config.PROJECT_ROOT / "0 - DADS dataset extraction" / "dataset_combined"
-    
-    if not combined_path.exists():
-        print("[ERROR] Combined dataset not found")
-        return None
-    
-    categories = {
-        'Original (Clean)': [],
-        'Very Far (-15dB)': [],
-        'Far (-10dB)': [],
-        'Medium (-5dB)': [],
-        'Close (0dB)': [],
-        'Very Close (+5dB)': []
-    }
-    
-    # Map filename patterns to categories - search in both 0/ and 1/ subdirectories
-    for subfolder in ['0', '1']:
-        subfolder_path = combined_path / subfolder
-        if not subfolder_path.exists():
-            continue
-            
-        for file_path in subfolder_path.glob('*.wav'):
-            filename = file_path.name
-            
-            if 'drone_very_far' in filename:
-                categories['Very Far (-15dB)'].append(file_path)
-            elif 'drone_far' in filename and 'very_far' not in filename:
-                categories['Far (-10dB)'].append(file_path)
-            elif 'drone_medium' in filename:
-                categories['Medium (-5dB)'].append(file_path)
-            elif 'drone_close' in filename and 'very_close' not in filename:
-                categories['Close (0dB)'].append(file_path)
-            elif 'drone_very_close' in filename:
-                categories['Very Close (+5dB)'].append(file_path)
-            elif 'orig_' in filename:
-                categories['Original (Clean)'].append(file_path)
-    
-    # Filter out empty categories
-    categories = {k: v for k, v in categories.items() if v}
-    
-    return categories
-
-
 def evaluate_model_on_category(model, model_name, files, feature_type='mel'):
-    """Evaluate a model on a specific category of files."""
-    if not files:
-        return None
+    """
+    Evaluate a model on files from a specific category.
     
-    print(f"  Evaluating {len(files)} files...", end=' ')
+    Args:
+        model: Trained model
+        model_name: Name of model (CNN, RNN, CRNN)
+        files: List of Path objects to audio files
+        feature_type: 'mel' or 'mfcc'
+    
+    Returns:
+        Dictionary with accuracy, precision, recall, f1 metrics
+    """
+    print(f"  Evaluating {len(files)} files... ", end='', flush=True)
     
     predictions = []
-    labels = []  # All are drones (label=1) in this case
-    
-    preprocess_func = preprocess_audio_for_mel if feature_type == 'mel' else preprocess_audio_for_mfcc
+    labels = []
     
     for file_path in files:
         try:
-            # Extract true label from parent directory name
-            # Files are in dataset_combined/0/ (no-drone) or dataset_combined/1/ (drone)
+            # Get true label from parent directory name
             true_label = int(file_path.parent.name)
             
-            # Preprocess
-            features = preprocess_func(file_path)
-            
-            if len(features) == 0:
-                continue
+            # Preprocess audio
+            if feature_type == 'mel':
+                features = preprocess_audio_for_mel(file_path)
+            else:
+                raise ValueError(f"Unsupported feature type: {feature_type}")
             
             # Reshape for model input
             # For CNN/CRNN (mel): (segments, time_steps, features) -> (segments, time_steps, features, 1)
@@ -254,9 +327,19 @@ def evaluate_model_on_category(model, model_name, files, feature_type='mel'):
     
     # Calculate metrics
     accuracy = accuracy_score(labels, predictions)
-    precision, recall, f1, _ = precision_recall_fscore_support(labels, predictions, 
-                                                                average='binary', 
-                                                                zero_division=0)
+    
+    # Handle cases where category has only one class
+    unique_labels = np.unique(labels)
+    if len(unique_labels) == 1:
+        # Single class - use simple accuracy
+        precision = accuracy
+        recall = accuracy
+        f1 = accuracy
+    else:
+        # Binary classification
+        precision, recall, f1, _ = precision_recall_fscore_support(labels, predictions, 
+                                                                    average='binary', 
+                                                                    zero_division=0)
     
     print(f"  Accuracy: {accuracy*100:.1f}%, Recall: {recall*100:.1f}%, Precision: {precision*100:.1f}%")
     
@@ -270,23 +353,16 @@ def evaluate_model_on_category(model, model_name, files, feature_type='mel'):
     }
 
 
-def test_models_by_distance():
+def test_models_by_distance(categories, category_files):
     """Test all models on each distance category."""
     print("[1/2] Loading models...")
     models = load_models()
     
     if not models:
         print("[ERROR] No models loaded")
-        return None, None
+        return None
     
-    print(f"\n[2/2] Getting category files...")
-    categories = get_category_files()
-    
-    if not categories:
-        print("[ERROR] No category files found")
-        return None, None
-    
-    print(f"Found {len(categories)} categories\n")
+    print(f"\n[2/2] Testing on {len(category_files)} categories...")
     
     # Test each model on each category
     results = defaultdict(dict)
@@ -298,15 +374,74 @@ def test_models_by_distance():
         # All models use mel spectrograms in this project
         feature_type = 'mel'
         
-        for cat_name, files in categories.items():
-            print(f"{cat_name:20s} ({len(files):3d} files): ", end='')
+        for cat_name, cat_data in category_files.items():
+            files = cat_data['files']
+            display_name = cat_data['display_name']
             
-            result = evaluate_model_on_category(model, model_name, files[:100], feature_type)  # Limit to 100 for speed
+            print(f"{display_name:25s} ({len(files):4d} files): ", end='')
+            
+            # Limit to 100 files for speed
+            result = evaluate_model_on_category(model, model_name, files[:100], feature_type)
             
             if result:
-                results[model_name][cat_name] = result
+                results[model_name][cat_name] = {
+                    **result,
+                    'display_name': display_name,
+                    'snr_db': cat_data['snr_db']
+                }
     
-    return results, categories
+    return results
+
+
+def generate_performance_table(results, categories):
+    """Generate detailed performance table by distance."""
+    if not results:
+        return None
+    
+    # Sort categories by SNR (worst to best)
+    sorted_cats = sorted(
+        [(cat_name, cat_info) for cat_name, cat_info in categories.items()],
+        key=lambda x: x[1]['snr_db']
+    )
+    
+    table_data = []
+    
+    for cat_name, cat_info in sorted_cats:
+        # Check if this category has results
+        has_results = any(cat_name in model_results for model_results in results.values())
+        if not has_results:
+            continue
+        
+        row = {'Category': cat_info['display_name']}
+        
+        for model_name, model_results in results.items():
+            if cat_name in model_results:
+                res = model_results[cat_name]
+                row[f'{model_name} Acc (%)'] = f"{res['accuracy']*100:.2f}"
+                row[f'{model_name} F1 (%)'] = f"{res['f1']*100:.2f}"
+        
+        if len(row) > 1:  # Has data beyond category name
+            table_data.append(row)
+    
+    if not table_data:
+        return None
+    
+    df = pd.DataFrame(table_data)
+    
+    # Save to CSV
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    csv_path = OUTPUT_DIR / "performance_by_distance.csv"
+    df.to_csv(csv_path, index=False)
+    print(f"[OK] Saved: {csv_path}")
+    
+    # Print formatted table
+    print("\n" + "=" * 100)
+    print("REAL PERFORMANCE BY DISTANCE/SNR")
+    print("=" * 100)
+    print(df.to_string(index=False))
+    print("=" * 100)
+    
+    return df
 
 
 def plot_performance_by_distance(results, categories):
@@ -315,39 +450,49 @@ def plot_performance_by_distance(results, categories):
         print("[WARNING] No results to plot")
         return None
     
-    # Prepare data
-    cat_order = ['Very Far (-15dB)', 'Far (-10dB)', 'Medium (-5dB)', 
-                 'Close (0dB)', 'Very Close (+5dB)', 'Original (Clean)']
-    cat_order = [c for c in cat_order if c in list(results.values())[0]]
+    # Sort categories by SNR (worst to best)
+    sorted_cats = sorted(
+        [(cat_name, cat_info) for cat_name, cat_info in categories.items()],
+        key=lambda x: x[1]['snr_db']
+    )
+    
+    # Filter to categories with results
+    cat_order = [
+        (cat_name, cat_info) 
+        for cat_name, cat_info in sorted_cats 
+        if any(cat_name in model_results for model_results in results.values())
+    ]
+    
+    if not cat_order:
+        print("[WARNING] No categories with results")
+        return None
     
     fig, axes = plt.subplots(2, 2, figsize=(16, 12))
     
+    # Extract display names and SNRs
+    display_names = [cat_info['display_name'] for _, cat_info in cat_order]
+    cat_names = [cat_name for cat_name, _ in cat_order]
+    snr_values = [cat_info['snr_db'] for _, cat_info in cat_order]
+    
     # Plot 1: Accuracy by category
     ax1 = axes[0, 0]
-    x = np.arange(len(cat_order))
+    x = np.arange(len(cat_names))
     width = 0.25
     
     colors = {'CNN': 'steelblue', 'RNN': 'coral', 'CRNN': 'lightgreen'}
     
     for i, (model_name, model_results) in enumerate(results.items()):
-        accuracies = [model_results.get(cat, {}).get('accuracy', 0) * 100 
-                     for cat in cat_order]
-        
-        bars = ax1.bar(x + i*width, accuracies, width, label=model_name, 
-                      color=colors.get(model_name, 'gray'), alpha=0.8)
-        
-        # Add value labels
-        for bar in bars:
-            height = bar.get_height()
-            ax1.text(bar.get_x() + bar.get_width()/2., height,
-                    f'{height:.1f}%',
-                    ha='center', va='bottom', fontsize=8, fontweight='bold')
+        accuracies = [
+            model_results[cat_name]['accuracy'] * 100 if cat_name in model_results else 0
+            for cat_name in cat_names
+        ]
+        ax1.bar(x + i*width, accuracies, width, label=model_name, color=colors.get(model_name, 'gray'))
     
-    ax1.set_xlabel('Detection Scenario', fontweight='bold', fontsize=11)
-    ax1.set_ylabel('Accuracy (%)', fontweight='bold', fontsize=11)
-    ax1.set_title('Model Accuracy by Drone Distance', fontsize=13, fontweight='bold')
+    ax1.set_xlabel('Distance Category')
+    ax1.set_ylabel('Accuracy (%)')
+    ax1.set_title('Model Accuracy by Drone Distance', fontweight='bold')
     ax1.set_xticks(x + width)
-    ax1.set_xticklabels(cat_order, rotation=20, ha='right', fontsize=9)
+    ax1.set_xticklabels(display_names, rotation=45, ha='right')
     ax1.legend()
     ax1.grid(axis='y', alpha=0.3)
     ax1.set_ylim([0, 105])
@@ -356,260 +501,212 @@ def plot_performance_by_distance(results, categories):
     ax2 = axes[0, 1]
     
     for i, (model_name, model_results) in enumerate(results.items()):
-        f1_scores = [model_results.get(cat, {}).get('f1', 0) * 100 
-                    for cat in cat_order]
-        
-        bars = ax2.bar(x + i*width, f1_scores, width, label=model_name, 
-                      color=colors.get(model_name, 'gray'), alpha=0.8)
-        
-        # Add value labels
-        for bar in bars:
-            height = bar.get_height()
-            ax2.text(bar.get_x() + bar.get_width()/2., height,
-                    f'{height:.1f}%',
-                    ha='center', va='bottom', fontsize=8, fontweight='bold')
+        f1_scores = [
+            model_results[cat_name]['f1'] * 100 if cat_name in model_results else 0
+            for cat_name in cat_names
+        ]
+        ax2.bar(x + i*width, f1_scores, width, label=model_name, color=colors.get(model_name, 'gray'))
     
-    ax2.set_xlabel('Detection Scenario', fontweight='bold', fontsize=11)
-    ax2.set_ylabel('F1-Score (%)', fontweight='bold', fontsize=11)
-    ax2.set_title('Model F1-Score by Drone Distance', fontsize=13, fontweight='bold')
+    ax2.set_xlabel('Distance Category')
+    ax2.set_ylabel('F1-Score (%)')
+    ax2.set_title('Model F1-Score by Drone Distance', fontweight='bold')
     ax2.set_xticks(x + width)
-    ax2.set_xticklabels(cat_order, rotation=20, ha='right', fontsize=9)
+    ax2.set_xticklabels(display_names, rotation=45, ha='right')
     ax2.legend()
     ax2.grid(axis='y', alpha=0.3)
     ax2.set_ylim([0, 105])
     
-    # Plot 3: Performance degradation curves
+    # Plot 3: Performance vs SNR (line plot)
     ax3 = axes[1, 0]
     
-    snr_values = [-15, -10, -5, 0, 5, 100]  # 100 for original
-    cat_to_snr = {cat: snr for cat, snr in zip(cat_order, snr_values[:len(cat_order)])}
+    # Filter out infinite SNR (original clean)
+    finite_snr_indices = [i for i, snr in enumerate(snr_values) if np.isfinite(snr)]
     
-    for model_name, model_results in results.items():
-        snrs = []
-        accs = []
-        
-        for cat in cat_order:
-            if cat in model_results:
-                snrs.append(cat_to_snr.get(cat, 0))
-                accs.append(model_results[cat]['accuracy'] * 100)
-        
-        ax3.plot(snrs, accs, marker='o', linewidth=2.5, markersize=10,
-                label=model_name, color=colors.get(model_name, 'gray'), alpha=0.8)
-    
-    ax3.set_xlabel('SNR (dB) - Higher = Closer Drone', fontweight='bold', fontsize=11)
-    ax3.set_ylabel('Accuracy (%)', fontweight='bold', fontsize=11)
-    ax3.set_title('Performance vs. Drone Distance (Real Data)', fontsize=13, fontweight='bold')
-    ax3.legend(fontsize=10)
-    ax3.grid(alpha=0.3)
-    ax3.set_ylim([0, 105])
-    ax3.axhline(y=50, color='red', linestyle='--', linewidth=1, alpha=0.5, label='Random Chance')
-    
-    # Add difficulty zones
-    ax3.axvspan(-20, -10, alpha=0.1, color='red')
-    ax3.axvspan(-10, -5, alpha=0.1, color='orange')
-    ax3.axvspan(-5, 0, alpha=0.1, color='yellow')
-    ax3.axvspan(0, 10, alpha=0.1, color='green')
-    
-    # Plot 4: Sample count by category
-    ax4 = axes[1, 1]
-    
-    sample_counts = [len(categories[cat]) for cat in cat_order]
-    
-    difficulty_colors = ['#e74c3c', '#e67e22', '#f39c12', '#2ecc71', '#27ae60', '#3498db']
-    bars = ax4.bar(x, sample_counts, color=difficulty_colors[:len(cat_order)], 
-                   alpha=0.8, edgecolor='black', linewidth=1.5)
-    
-    for bar, count in zip(bars, sample_counts):
-        height = bar.get_height()
-        ax4.text(bar.get_x() + bar.get_width()/2., height,
-                str(count),
-                ha='center', va='bottom', fontsize=10, fontweight='bold')
-    
-    ax4.set_xlabel('Detection Scenario', fontweight='bold', fontsize=11)
-    ax4.set_ylabel('Number of Test Samples', fontweight='bold', fontsize=11)
-    ax4.set_title('Test Sample Distribution', fontsize=13, fontweight='bold')
-    ax4.set_xticks(x)
-    ax4.set_xticklabels(cat_order, rotation=20, ha='right', fontsize=9)
-    ax4.grid(axis='y', alpha=0.3)
-    
-    plt.tight_layout()
-    
-    # Save
-    output_dir = Path(__file__).parent / 'outputs'
-    output_dir.mkdir(exist_ok=True)
-    plt.savefig(output_dir / 'real_performance_by_distance.png', dpi=300, bbox_inches='tight')
-    print(f"\n[OK] Saved: {output_dir / 'real_performance_by_distance.png'}")
-    
-    return fig
-
-
-def generate_performance_table(results):
-    """Generate detailed performance table by distance."""
-    if not results:
-        return None
-    
-    cat_order = ['Very Far (-15dB)', 'Far (-10dB)', 'Medium (-5dB)', 
-                 'Close (0dB)', 'Very Close (+5dB)', 'Original (Clean)']
-    
-    table_data = []
-    
-    for cat in cat_order:
-        row = {'Category': cat}
+    if finite_snr_indices:
+        finite_snrs = [snr_values[i] for i in finite_snr_indices]
+        finite_cats = [cat_names[i] for i in finite_snr_indices]
         
         for model_name, model_results in results.items():
-            if cat in model_results:
-                res = model_results[cat]
-                row[f'{model_name} Acc (%)'] = f"{res['accuracy']*100:.2f}"
-                row[f'{model_name} F1 (%)'] = f"{res['f1']*100:.2f}"
-        
-        if len(row) > 1:  # Has data
-            table_data.append(row)
+            accuracies = [
+                model_results[cat_name]['accuracy'] * 100 if cat_name in model_results else 0
+                for cat_name in finite_cats
+            ]
+            ax3.plot(finite_snrs, accuracies, marker='o', linewidth=2, 
+                    label=model_name, color=colors.get(model_name, 'gray'))
     
-    df = pd.DataFrame(table_data)
+    ax3.set_xlabel('SNR (dB)')
+    ax3.set_ylabel('Accuracy (%)')
+    ax3.set_title('Performance vs. Drone Distance (SNR)', fontweight='bold')
+    ax3.legend()
+    ax3.grid(True, alpha=0.3)
+    ax3.set_ylim([0, 105])
     
-    # Save
-    output_dir = Path(__file__).parent / 'outputs'
-    output_dir.mkdir(exist_ok=True)
+    # Plot 4: Performance degradation
+    ax4 = axes[1, 1]
     
-    csv_path = output_dir / 'performance_by_distance.csv'
-    df.to_csv(csv_path, index=False)
-    print(f"[OK] Saved: {csv_path}")
+    if finite_snr_indices and len(finite_snr_indices) > 1:
+        # Calculate degradation from best to worst SNR
+        for model_name, model_results in results.items():
+            accuracies = [
+                model_results[cat_name]['accuracy'] * 100 if cat_name in model_results else 0
+                for cat_name in finite_cats
+            ]
+            
+            # Degradation relative to best performance
+            best_acc = max(accuracies) if accuracies else 0
+            degradations = [best_acc - acc for acc in accuracies]
+            
+            ax4.plot(finite_snrs, degradations, marker='s', linewidth=2,
+                    label=model_name, color=colors.get(model_name, 'gray'))
     
-    # Print table
-    print("\n" + "="*100)
-    print("REAL PERFORMANCE BY DISTANCE/SNR")
-    print("="*100)
-    print(df.to_string(index=False))
-    print("="*100 + "\n")
-    
-    return df
-
-
-def analyze_performance_by_distance():
-    """
-    Analyze performance by distance category using augmentation metadata.
-    """
-    # Load augmentation metadata
-    metadata_path = config.PROJECT_ROOT / "0 - DADS dataset extraction" / "dataset_augmented" / "augmentation_metadata.json"
-    
-    if not metadata_path.exists():
-        print("[WARNING] Augmentation metadata not found")
-        return None
-    
-    with open(metadata_path, 'r') as f:
-        metadata = json.load(f)
-    
-    # Extract category information
-    categories_info = metadata.get('config', {}).get('augmented_categories', [])
-    stats = metadata.get('statistics', {}).get('categories', {})
-    
-    # Create structured data
-    distance_data = []
-    
-    for cat_info in categories_info:
-        cat_name = cat_info['name']
-        cat_stats = stats.get(cat_name, {})
-        
-        distance_data.append({
-            'category': cat_name,
-            'display_name': cat_info.get('description', cat_name),
-            'snr_db': cat_info['snr_db'],
-            'achieved_snr': cat_stats.get('avg_snr_db', cat_info['snr_db']),
-            'num_samples': cat_stats.get('generated', 0),
-            'num_bg_noises': cat_info['num_background_noises']
-        })
-    
-    # Add original samples
-    dataset_test_path = config.PROJECT_ROOT / "0 - DADS dataset extraction" / "dataset_test" / "1"
-    if dataset_test_path.exists():
-        orig_count = len(list(dataset_test_path.glob('*.wav')))
-        distance_data.append({
-            'category': 'original',
-            'display_name': 'Original (Clean)',
-            'snr_db': 100,  # Placeholder for "infinite" SNR
-            'achieved_snr': 100,
-            'num_samples': orig_count,
-            'num_bg_noises': 0
-        })
-    
-    return distance_data
-
-
-def plot_difficulty_spectrum_simple(distance_data):
-    """Plot the difficulty spectrum (simplified version)."""
-    # Sort by SNR
-    distance_data.sort(key=lambda x: x['snr_db'])
-    
-    fig, ax = plt.subplots(figsize=(12, 6))
-    
-    categories = [d['display_name'] for d in distance_data]
-    samples = [d['num_samples'] for d in distance_data]
-    
-    colors = ['#e74c3c', '#e67e22', '#f39c12', '#2ecc71', '#27ae60', '#3498db']
-    
-    bars = ax.bar(range(len(categories)), samples, color=colors[:len(categories)], 
-                  alpha=0.8, edgecolor='black', linewidth=1.5)
-    
-    for bar, count in zip(bars, samples):
-        height = bar.get_height()
-        ax.text(bar.get_x() + bar.get_width()/2., height,
-               str(count),
-               ha='center', va='bottom', fontsize=10, fontweight='bold')
-    
-    ax.set_xlabel('Detection Scenario (Easier →)', fontweight='bold', fontsize=12)
-    ax.set_ylabel('Number of Samples', fontweight='bold', fontsize=12)
-    ax.set_title('Test Sample Distribution by Difficulty', fontsize=14, fontweight='bold')
-    ax.set_xticks(range(len(categories)))
-    ax.set_xticklabels(categories, rotation=20, ha='right')
-    ax.grid(axis='y', alpha=0.3)
+    ax4.set_xlabel('SNR (dB)')
+    ax4.set_ylabel('Performance Degradation (%)')
+    ax4.set_title('Model Robustness to Noise (Lower is Better)', fontweight='bold')
+    ax4.legend()
+    ax4.grid(True, alpha=0.3)
+    ax4.axhline(y=0, color='black', linestyle='--', alpha=0.3)
     
     plt.tight_layout()
     
-    output_dir = Path(__file__).parent / 'outputs'
-    plt.savefig(output_dir / 'difficulty_spectrum.png', dpi=300, bbox_inches='tight')
-    print(f"[OK] Saved: {output_dir / 'difficulty_spectrum.png'}")
+    # Save figure
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    output_path = OUTPUT_DIR / "real_performance_by_distance.png"
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    print(f"\n[OK] Saved: {output_path}")
     
-    return fig
+    plt.close()
+    return output_path
+
+
+def plot_difficulty_spectrum(categories, category_files):
+    """Plot the difficulty spectrum showing SNR levels and sample counts."""
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+    
+    # Sort categories by SNR
+    sorted_cats = sorted(
+        [(cat_name, cat_info) for cat_name, cat_info in categories.items()],
+        key=lambda x: x[1]['snr_db']
+    )
+    
+    # Filter to categories with files
+    filtered_cats = [
+        (cat_name, cat_info) 
+        for cat_name, cat_info in sorted_cats 
+        if cat_name in category_files
+    ]
+    
+    if not filtered_cats:
+        print("[WARNING] No categories to plot")
+        return
+    
+    display_names = [cat_info['display_name'] for _, cat_info in filtered_cats]
+    cat_names = [cat_name for cat_name, _ in filtered_cats]
+    snr_values = [cat_info['snr_db'] if np.isfinite(cat_info['snr_db']) else 0 for _, cat_info in filtered_cats]
+    file_counts = [len(category_files[cat_name]['files']) for cat_name in cat_names]
+    
+    # Plot 1: SNR levels
+    colors = plt.cm.RdYlGn(np.linspace(0.2, 0.8, len(cat_names)))
+    
+    bars1 = ax1.bar(display_names, snr_values, color=colors, edgecolor='black', linewidth=1.5)
+    ax1.set_xlabel('Category', fontsize=12, fontweight='bold')
+    ax1.set_ylabel('SNR (dB)', fontsize=12, fontweight='bold')
+    ax1.set_title('Difficulty Spectrum: SNR by Category', fontsize=14, fontweight='bold')
+    ax1.tick_params(axis='x', rotation=45)
+    ax1.grid(axis='y', alpha=0.3)
+    ax1.axhline(y=0, color='red', linestyle='--', linewidth=2, alpha=0.5, label='SNR = 0dB')
+    ax1.legend()
+    
+    # Add value labels on bars
+    for bar, snr in zip(bars1, snr_values):
+        height = bar.get_height()
+        ax1.text(bar.get_x() + bar.get_width()/2., height,
+                f'{snr:+.0f}dB' if np.isfinite(snr) else 'Clean',
+                ha='center', va='bottom', fontweight='bold')
+    
+    # Plot 2: Sample distribution
+    bars2 = ax2.bar(display_names, file_counts, color=colors, edgecolor='black', linewidth=1.5)
+    ax2.set_xlabel('Category', fontsize=12, fontweight='bold')
+    ax2.set_ylabel('Number of Samples', fontsize=12, fontweight='bold')
+    ax2.set_title('Dataset Distribution by Category', fontsize=14, fontweight='bold')
+    ax2.tick_params(axis='x', rotation=45)
+    ax2.grid(axis='y', alpha=0.3)
+    
+    # Add value labels on bars
+    for bar, count in zip(bars2, file_counts):
+        height = bar.get_height()
+        ax2.text(bar.get_x() + bar.get_width()/2., height,
+                f'{count}',
+                ha='center', va='bottom', fontweight='bold')
+    
+    plt.tight_layout()
+    
+    # Save figure
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    output_path = OUTPUT_DIR / "difficulty_spectrum.png"
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    print(f"[OK] Saved: {output_path}")
+    
+    plt.close()
 
 
 def main():
-    """Run real performance analysis by distance."""
-    print("="*80)
+    """Main execution function."""
+    print("=" * 80)
     print("REAL PERFORMANCE BY DISTANCE ANALYSIS")
-    print("="*80 + "\n")
-    
-    print("Testing trained models on each SNR category...")
+    print("=" * 80)
+    print("\nTesting trained models on each SNR category...")
     print("This will take several minutes...\n")
     
-    # Test models on each category
-    print("[STEP 1/4] Testing models by distance category...")
-    results, categories = test_models_by_distance()
+    # Load configuration
+    print("[STEP 1/5] Loading augmentation configuration...")
+    aug_config = load_augmentation_config()
+    if not aug_config:
+        print("[ERROR] Cannot proceed without configuration")
+        return
+    
+    # Extract categories from config
+    print("\n[STEP 2/5] Extracting category definitions...")
+    categories = get_categories_from_config(aug_config)
+    print(f"[OK] Found {len(categories)} categories:")
+    for cat_name, cat_info in categories.items():
+        print(f"  - {cat_info['display_name']}: {cat_info.get('description', 'N/A')[:60]}")
+    
+    # Get files for each category
+    print(f"\n[STEP 3/5] Scanning dataset files...")
+    category_files = get_category_files(categories)
+    print(f"[OK] Found files for {len(category_files)} categories:")
+    for cat_name, cat_data in category_files.items():
+        print(f"  - {cat_data['display_name']}: {len(cat_data['files'])} files")
+    
+    if not category_files:
+        print("[ERROR] No category files found!")
+        return
+    
+    # Test models
+    print(f"\n[STEP 4/5] Testing models by distance category...")
+    results = test_models_by_distance(categories, category_files)
     
     if not results:
-        print("[ERROR] No results obtained")
-        return 1
+        print("[ERROR] No results generated")
+        return
     
-    # Generate performance table
-    print("\n[STEP 2/4] Generating performance table...")
-    generate_performance_table(results)
+    # Generate outputs
+    print(f"\n[STEP 5/5] Generating performance analysis...")
     
-    # Plot results
-    print("\n[STEP 3/4] Plotting performance by distance...")
+    print("\n[5a/5] Generating performance table...")
+    generate_performance_table(results, categories)
+    
+    print("\n[5b/5] Plotting performance by distance...")
     plot_performance_by_distance(results, categories)
     
-    # Plot difficulty spectrum
-    print("\n[STEP 4/4] Plotting difficulty spectrum...")
-    distance_data = analyze_performance_by_distance()
-    if distance_data:
-        plot_difficulty_spectrum_simple(distance_data)
+    print("\n[5c/5] Plotting difficulty spectrum...")
+    plot_difficulty_spectrum(categories, category_files)
     
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("[SUCCESS] Real performance by distance analysis complete!")
-    print("="*80)
-    print(f"\nOutputs saved in: {Path(__file__).parent / 'outputs'}")
-    
-    return 0
+    print("=" * 80)
+    print(f"\nOutputs saved in: {OUTPUT_DIR.absolute()}")
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

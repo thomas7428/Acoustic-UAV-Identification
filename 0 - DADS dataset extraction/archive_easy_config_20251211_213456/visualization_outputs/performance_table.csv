@@ -1,0 +1,4 @@
+Model,Test Accuracy (%),Train Accuracy (%),No-Drone Precision (%),No-Drone Recall (%),No-Drone F1 (%),Drone Precision (%),Drone Recall (%),Drone F1 (%)
+CNN,98.90,N/A,97.84,100.00,98.91,100.00,97.79,98.88
+RNN,98.92,N/A,97.92,99.96,98.93,99.96,97.88,98.91
+CRNN,98.98,N/A,98.00,100.00,98.99,100.00,97.96,98.97

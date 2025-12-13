@@ -1,0 +1,88 @@
+{
+  "datasets": {
+    "dataset_test": {
+      "no_drone": 640,
+      "drone": 640,
+      "total": 1280,
+      "balance_ratio": 1.0
+    },
+    "dataset_augmented": {
+      "no_drone": 2000,
+      "drone": 2000,
+      "total": 4000,
+      "balance_ratio": 1.0
+    },
+    "dataset_combined": {
+      "no_drone": 2400,
+      "drone": 2400,
+      "total": 4800,
+      "balance_ratio": 1.0
+    }
+  },
+  "augmentation": {
+    "drone_augmentation": {
+      "total_generated": 2000,
+      "categories": {
+        "drone_very_far": {
+          "target": 700,
+          "generated": 700,
+          "errors": 0,
+          "avg_snr_db": -14.971254144199941
+        },
+        "drone_far": {
+          "target": 600,
+          "generated": 600,
+          "errors": 0,
+          "avg_snr_db": -10.001656823453441
+        },
+        "drone_medium": {
+          "target": 400,
+          "generated": 400,
+          "errors": 0,
+          "avg_snr_db": -5.037233200661026
+        },
+        "drone_close": {
+          "target": 200,
+          "generated": 200,
+          "errors": 0,
+          "avg_snr_db": 0.005143126167228918
+        },
+        "drone_very_close": {
+          "target": 100,
+          "generated": 100,
+          "errors": 0,
+          "avg_snr_db": 5.056412160456368
+        }
+      },
+      "errors": 0
+    },
+    "no_drone_augmentation": {
+      "total_generated": 2000,
+      "categories": {
+        "ambient_complex": {
+          "target": 800,
+          "generated": 800,
+          "errors": 0
+        },
+        "ambient_moderate": {
+          "target": 600,
+          "generated": 600,
+          "errors": 0
+        },
+        "ambient_simple": {
+          "target": 400,
+          "generated": 400,
+          "errors": 0
+        },
+        "ambient_quiet": {
+          "target": 200,
+          "generated": 200,
+          "errors": 0
+        }
+      },
+      "errors": 0
+    },
+    "total_generated": 4000,
+    "total_errors": 0
+  }
+}

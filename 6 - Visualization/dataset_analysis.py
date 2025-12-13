@@ -142,7 +142,7 @@ def plot_snr_distribution():
     with open(metadata_path, 'r') as f:
         metadata = json.load(f)
     
-    # Extract SNR values by category
+    # Extract SNR values by category (only for drone samples)
     samples = metadata.get('samples', [])
     if not samples:
         print("[WARNING] No samples in metadata")
@@ -150,6 +150,9 @@ def plot_snr_distribution():
     
     categories = {}
     for sample in samples:
+        # Skip samples without SNR (no_drone samples don't have SNR)
+        if 'actual_snr_db' not in sample:
+            continue
         cat = sample['category']
         snr = sample['actual_snr_db']
         if cat not in categories:

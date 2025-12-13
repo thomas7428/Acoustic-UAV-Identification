@@ -46,9 +46,7 @@ Thumbs.db
 # ====================================
 
 # Datasets (Audio files can be very large)
-0 - DADS dataset extraction/dataset_test/
-0 - DADS dataset extraction/dataset_augmented/
-0 - DADS dataset extraction/dataset_combined/
+0 - DADS dataset extraction/dataset_*/
 0 - DADS dataset extraction/*.wav
 0 - DADS dataset extraction/*.mp3
 
