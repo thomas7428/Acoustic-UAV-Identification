@@ -57,6 +57,7 @@ SAMPLES_PER_TRACK = SAMPLE_RATE * DURATION
 # Paths
 AUGMENT_CONFIG_PATH = Path(__file__).parent.parent / "0 - DADS dataset extraction" / "augment_config_v2.json"
 DATASET_COMBINED_PATH = Path(__file__).parent.parent / "0 - DADS dataset extraction" / "dataset_combined"
+FEATURES_JSON_PATH = Path(__file__).parent.parent / "0 - DADS dataset extraction" / "extracted_features" / "mel_pitch_shift_9.0.json"
 OUTPUT_DIR = Path(__file__).parent / "outputs"
 
 
@@ -191,6 +192,29 @@ def get_category_files(categories):
     return category_files
 
 
+def load_precomputed_features():
+    """Load pre-computed MEL features from JSON file."""
+    if not FEATURES_JSON_PATH.exists():
+        print(f"[ERROR] Features JSON not found: {FEATURES_JSON_PATH}")
+        return None
+    
+    try:
+        print(f"[INFO] Loading pre-computed features from {FEATURES_JSON_PATH}...")
+        with open(FEATURES_JSON_PATH, 'r') as f:
+            data = json.load(f)
+        
+        mel_features = np.array(data['mel'])  # Shape: (48000, 44, 90)
+        labels = np.array(data['labels'])
+        
+        print(f"[OK] Loaded {len(mel_features)} pre-computed MEL features")
+        print(f"[INFO] Feature shape: {mel_features[0].shape}")
+        
+        return {'features': mel_features, 'labels': labels}
+    except Exception as e:
+        print(f"[ERROR] Failed to load features: {e}")
+        return None
+
+
 def load_models():
     """Load trained models."""
     models = {}
@@ -198,13 +222,14 @@ def load_models():
     model_paths = {
         'CNN': config.CNN_MODEL_PATH,
         'RNN': config.RNN_MODEL_PATH,
-        'CRNN': config.CRNN_MODEL_PATH
+        'CRNN': config.CRNN_MODEL_PATH,
+        'Attention-CRNN': config.ATTENTION_CRNN_MODEL_PATH
     }
     
     for name, path in model_paths.items():
         if path.exists():
             try:
-                models[name] = keras.models.load_model(path)
+                models[name] = keras.models.load_model(path, compile=False)
                 print(f"[OK] Loaded {name} model")
             except Exception as e:
                 print(f"[WARNING] Failed to load {name}: {e}")
@@ -214,52 +239,48 @@ def load_models():
     return models
 
 
-def preprocess_audio_for_mel(file_path, num_segments=10):
-    """Preprocess audio file to Mel spectrogram format."""
-    n_mels = 90
+def get_precomputed_features_for_file(file_path, precomputed_data, num_segments=10):
+    """Get MEL features using EXACT same parameters as training.
+    
+    CRITICAL: Training uses 4 seconds with shape (44, 90).
+    Test MUST match this exactly or we get catastrophic failure.
+    
+    Args:
+        file_path: Path to audio file
+        precomputed_data: Not used (kept for compatibility)
+        num_segments: Ignored - we use single 4-second window like training
+    
+    Returns:
+        Array of shape (44, 90) - SINGLE MEL spectrogram matching training
+    """
+    n_mels = 44  # MATCH training (not 90!)
     n_fft = 2048
     hop_length = 512
     
-    # Load audio
-    signal, sr = librosa.load(file_path, sr=SAMPLE_RATE)
+    # Load audio - EXACTLY 4 seconds like training
+    audio, sr = librosa.load(file_path, sr=SAMPLE_RATE, duration=4.0)
     
-    num_samples_per_segment = int(SAMPLES_PER_TRACK / num_segments)
-    expected_num_vectors = math.ceil(num_samples_per_segment / hop_length)
+    # Compute mel spectrogram
+    mel = librosa.feature.melspectrogram(y=audio, 
+                                        sr=sr,
+                                        n_fft=n_fft,
+                                        hop_length=hop_length,
+                                        n_mels=n_mels)
     
-    mels = []
+    # Convert to dB
+    mel_db = librosa.power_to_db(mel, ref=np.max)
     
-    for s in range(num_segments):
-        start_sample = num_samples_per_segment * s
-        finish_sample = start_sample + num_samples_per_segment
-        
-        segment = signal[start_sample:finish_sample]
-        
-        # Pad if necessary
-        if len(segment) < num_samples_per_segment:
-            segment = np.pad(segment, (0, num_samples_per_segment - len(segment)))
-        
-        # Compute mel spectrogram
-        mel = librosa.feature.melspectrogram(y=segment, 
-                                            sr=sr,
-                                            n_fft=n_fft,
-                                            hop_length=hop_length,
-                                            n_mels=n_mels)
-        
-        # Convert to dB
-        mel = librosa.power_to_db(mel, ref=np.max)
-        
-        # Ensure correct shape
-        if mel.shape[1] < expected_num_vectors:
-            mel = np.pad(mel, ((0, 0), (0, expected_num_vectors - mel.shape[1])), mode='constant')
-        elif mel.shape[1] > expected_num_vectors:
-            mel = mel[:, :expected_num_vectors]
-        
-        mels.append(mel.T)
+    # Pad or trim to exactly 90 time steps (matching training)
+    if mel_db.shape[1] < 90:
+        mel_db = np.pad(mel_db, ((0, 0), (0, 90 - mel_db.shape[1])), mode='constant')
+    else:
+        mel_db = mel_db[:, :90]
     
-    return np.array(mels)
+    # Return shape (44, 90) - NO segments, single prediction like training
+    return mel_db
 
 
-def evaluate_model_on_category(model, model_name, files, feature_type='mel'):
+def evaluate_model_on_category(model, model_name, files, precomputed_data, feature_type='mel'):
     """
     Evaluate a model on files from a specific category.
     
@@ -267,6 +288,7 @@ def evaluate_model_on_category(model, model_name, files, feature_type='mel'):
         model: Trained model
         model_name: Name of model (CNN, RNN, CRNN)
         files: List of Path objects to audio files
+        precomputed_data: Pre-computed features dict (not used, kept for compatibility)
         feature_type: 'mel' or 'mfcc'
     
     Returns:
@@ -282,31 +304,45 @@ def evaluate_model_on_category(model, model_name, files, feature_type='mel'):
             # Get true label from parent directory name
             true_label = int(file_path.parent.name)
             
-            # Preprocess audio
+            # Get features - shape (44, 90) matching training exactly
             if feature_type == 'mel':
-                features = preprocess_audio_for_mel(file_path)
+                features = get_precomputed_features_for_file(file_path, precomputed_data)
             else:
                 raise ValueError(f"Unsupported feature type: {feature_type}")
             
-            # Reshape for model input
-            # For CNN/CRNN (mel): (segments, time_steps, features) -> (segments, time_steps, features, 1)
-            # For RNN (mfcc): (segments, time_steps, features) -> (segments, time_steps, features)
-            if feature_type == 'mel':
-                features = features[..., np.newaxis]  # Add channel dimension
+            # Reshape for model input - add batch and channel dimensions
+            # Training shape: (batch, 44, 90, 1)
+            # Test must match: (1, 44, 90, 1)
+            if model_name in ['CNN', 'CRNN', 'Attention-CRNN']:
+                features = features[np.newaxis, ..., np.newaxis]  # (44, 90) -> (1, 44, 90, 1)
+            else:  # RNN
+                features = features[np.newaxis, ...]  # (44, 90) -> (1, 44, 90)
             
-            # Predict
+            # Predict - single prediction, no averaging
             pred = model.predict(features, verbose=0)
             
-            # Average predictions across segments
-            avg_pred = np.mean(pred, axis=0)
+            # Extract prediction from batch dimension
+            pred = pred[0]  # (1, 2) -> (2)
+            
+            # CALIBRATED THRESHOLDS (from threshold calibration analysis)
+            # Models require higher confidence to predict DRONE (reduce FP rate)
+            optimal_thresholds = {
+                'CNN': 0.85,           # Baseline: 92.1% F1 → Optimal: 94.9% F1
+                'RNN': 0.95,           # Baseline: 76.2% F1 → Optimal: 90.2% F1 (biggest gain)
+                'CRNN': 0.90,          # Baseline: 87.4% F1 → Optimal: 93.4% F1
+                'Attention-CRNN': 0.95 # Baseline: 88.1% F1 → Optimal: 94.1% F1
+            }
+            
+            threshold = optimal_thresholds.get(model_name, 0.5)
+            drone_prob = pred[1]  # Probability of class 1 (DRONE)
+            
+            # Apply calibrated threshold
+            pred_label = 1 if drone_prob >= threshold else 0
             
             # Debug first few predictions
             if len(predictions) < 3:
                 print(f"\n  [DEBUG] File: {file_path.name}, True label: {true_label}")
-                print(f"  [DEBUG] avg_pred: {avg_pred}, pred_label: {np.argmax(avg_pred)}")
-            
-            # Handle different output formats (softmax with 2 outputs)
-            pred_label = np.argmax(avg_pred)
+                print(f"  [DEBUG] Features shape: {features.shape}, drone_prob: {drone_prob:.3f}, threshold: {threshold:.2f}, pred_label: {pred_label}")
             
             predictions.append(pred_label)
             labels.append(true_label)
@@ -355,14 +391,21 @@ def evaluate_model_on_category(model, model_name, files, feature_type='mel'):
 
 def test_models_by_distance(categories, category_files):
     """Test all models on each distance category."""
-    print("[1/2] Loading models...")
+    print("[1/3] Loading pre-computed features...")
+    precomputed_data = load_precomputed_features()
+    
+    if precomputed_data is None:
+        print("[ERROR] Failed to load pre-computed features")
+        return None
+    
+    print("\n[2/3] Loading models...")
     models = load_models()
     
     if not models:
         print("[ERROR] No models loaded")
         return None
     
-    print(f"\n[2/2] Testing on {len(category_files)} categories...")
+    print(f"\n[3/3] Testing on {len(category_files)} categories...")
     
     # Test each model on each category
     results = defaultdict(dict)
@@ -381,7 +424,7 @@ def test_models_by_distance(categories, category_files):
             print(f"{display_name:25s} ({len(files):4d} files): ", end='')
             
             # Limit to 100 files for speed
-            result = evaluate_model_on_category(model, model_name, files[:100], feature_type)
+            result = evaluate_model_on_category(model, model_name, files[:100], precomputed_data, feature_type)
             
             if result:
                 results[model_name][cat_name] = {

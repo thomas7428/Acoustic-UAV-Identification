@@ -1,5 +1,6 @@
 import json
 import numpy as np
+import argparse
 from sklearn.model_selection import train_test_split
 import tensorflow.keras as keras
 import pandas as pd
@@ -11,6 +12,9 @@ from pathlib import Path
 # Add project root to path to import config
 sys.path.insert(0, str(Path(__file__).parent.parent))
 import config
+
+# Import loss functions
+from loss_functions import get_loss_function, get_metrics
 
 # Timer.
 startTime = datetime.now()
@@ -33,24 +37,41 @@ def load_data(data_path):
         :return y (ndarray): Targets
     """
 
-    with open(data_path, "r") as fp:
-        data = json.load(fp)
-
-    # Convert lists to numpy arrays.
-    X = np.array(data["mel"])  # The name in brackets is changed to "mfccs" if MFCC features are used to train.
-    y = np.array(data["labels"])
-    return X, y
+    import librosa
+    from pathlib import Path
+    
+    print("Loading from stratified directories (45% @ 500m)...")
+    train_dir = Path("../0 - DADS dataset extraction/dataset_train")
+    val_dir = Path("../0 - DADS dataset extraction/dataset_val")
+    
+    def load_from_dir(base_dir):
+        X, y = [], []
+        for label in [0, 1]:
+            class_dir = base_dir / str(label)
+            for wav_file in sorted(class_dir.glob("*.wav")):
+                audio, sr = librosa.load(wav_file, sr=22050, duration=4.0)
+                mel = librosa.feature.melspectrogram(y=audio, sr=sr, n_mels=44, n_fft=2048, hop_length=512)
+                mel_db = librosa.power_to_db(mel, ref=np.max)
+                if mel_db.shape[1] < 90:
+                    mel_db = np.pad(mel_db, ((0, 0), (0, 90 - mel_db.shape[1])), mode='constant')
+                else:
+                    mel_db = mel_db[:, :90]
+                X.append(mel_db)
+                y.append(label)
+        return np.array(X), np.array(y)
+    
+    X_train, y_train = load_from_dir(train_dir)
+    X_val, y_val = load_from_dir(val_dir)
+    return X_train, y_train, X_val, y_val
 
 
 def prepare_datasets(test_size, validation_size):
-    # Load extracted features and labels data.
-    X, y = load_data(DATA_PATH)
-
-    # Create train/test split.
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size)
-
-    # Create train/validation split.
-    X_train, X_validation, y_train, y_validation = train_test_split(X_train, y_train, test_size=validation_size)
+    # Load from stratified directories
+    X_train, y_train, X_validation, y_validation = load_data(DATA_PATH)
+    
+    # No test split needed
+    X_test = X_validation
+    y_test = y_validation
 
     # 3D array.
     X_train = X_train[..., np.newaxis]  # 4-dim array: (# samples, # time steps, # coefficients, 1)
@@ -103,31 +124,82 @@ def predict(model, X, y):
 
 
 if __name__ == "__main__":
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Train CNN model with configurable loss function')
+    parser.add_argument('--loss', type=str, default='focal', choices=['bce', 'weighted_bce', 'focal'],
+                       help='Loss function: bce, weighted_bce, or focal (default: focal)')
+    parser.add_argument('--class_weight', type=float, default=3.0,
+                       help='Class weight for drone class (for weighted_bce, default: 3.0)')
+    parser.add_argument('--focal_alpha', type=float, default=0.75,
+                       help='Focal loss alpha parameter (default: 0.75)')
+    parser.add_argument('--focal_gamma', type=float, default=0.0,
+                       help='Focal loss gamma parameter (default: 0.0) - Standard BCE')
+    parser.add_argument('--min_epochs', type=int, default=50,
+                       help='Minimum number of epochs before early stopping (default: 50)')
+    parser.add_argument('--stratified-validation', action='store_true',
+                       help='Enable distance-stratified validation (evaluates each distance separately)')
+    
+    args = parser.parse_args()
+    
+    print(colored(f"\n[CONFIG] Loss function: {args.loss}", "cyan"))
+    if args.loss == 'weighted_bce':
+        print(colored(f"[CONFIG] Drone class weight: {args.class_weight}", "cyan"))
+    elif args.loss == 'focal':
+        print(colored(f"[CONFIG] Focal alpha: {args.focal_alpha}, gamma: {args.focal_gamma}", "cyan"))
+    print()
+    
     # Create train, validation and test sets.
     X_train, X_validation, X_test, y_train, y_validation, y_test = prepare_datasets(0.25, 0.2)  # (test size, val size)
 
-    # Early stopping.
-    callback = keras.callbacks.EarlyStopping(monitor='val_loss', patience=10)
+    # Early stopping with minimum epochs.
+    callback = keras.callbacks.EarlyStopping(monitor='val_loss', patience=10, start_from_epoch=args.min_epochs)
 
     # Checkpoint.
     checkpoint = keras.callbacks.ModelCheckpoint(MODEL_SAVE, monitor='val_loss',
                                                  mode='min', save_best_only=True, verbose=1)
+    
+    # Distance-stratified validation callback (optional)
+    callbacks_list = [callback, checkpoint]
+    if args.stratified_validation:
+        from distance_stratified_callback import DistanceStratifiedCallback
+        stratified_callback = DistanceStratifiedCallback(
+            validation_dir="../0 - DADS dataset extraction/dataset_val",
+            model_name="cnn",
+            log_dir="../0 - DADS dataset extraction/results"
+        )
+        callbacks_list.append(stratified_callback)
+        print(colored("[INFO] Distance-stratified validation ENABLED", "green"))
 
     # Build the CNN network.
     input_shape = (X_train.shape[1], X_train.shape[2], X_train.shape[3])
     model = build_model(input_shape)
 
-    # Compile the network.
+    # Get loss function based on arguments
+    if args.loss == 'focal':
+        loss_fn = get_loss_function('focal', alpha=args.focal_alpha, gamma=args.focal_gamma)
+    elif args.loss == 'weighted_bce':
+        loss_fn = get_loss_function('weighted_bce', class_weight_drone=args.class_weight)
+    elif args.loss == 'recall_focused':
+        loss_fn = get_loss_function('recall_focused', fn_penalty=50.0)
+        print("[INFO] Using RECALL-FOCUSED LOSS (FN penalty=50x)")
+    else:
+        loss_fn = 'sparse_categorical_crossentropy'
+    
+    # Override with recall_focused for Phase 2F
+    loss_fn = get_loss_function('recall_focused', fn_penalty=50.0)
+    print("[PHASE 2F] FORCING RECALL-FOCUSED LOSS (FN penalty=50x)")
+    
+    # Compile the network with improved loss and metrics
     optimizer = keras.optimizers.Adam(learning_rate=0.0001)
     model.compile(optimizer=optimizer,
-                  loss="sparse_categorical_crossentropy",
+                  loss=loss_fn,
                   metrics=['accuracy'])
 
     model.summary()
 
     # Train the CNN.
     history = model.fit(X_train, y_train, validation_data=(X_validation, y_validation), batch_size=16, epochs=1000,
-                        callbacks=[callback, checkpoint])
+                        callbacks=callbacks_list)
 
     # Save history.
     hist = pd.DataFrame(history.history)

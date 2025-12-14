@@ -49,6 +49,11 @@ CRNN_MODEL_PATH = MODELS_DIR / "crnn_model.keras"
 CRNN_HISTORY_PATH = RESULTS_DIR / "crnn_history.csv"
 CRNN_ACC_PATH = RESULTS_DIR / "crnn_accuracy.json"
 
+# Attention-Enhanced CRNN Model paths
+ATTENTION_CRNN_MODEL_PATH = MODELS_DIR / "attention_crnn_model.keras"
+ATTENTION_CRNN_HISTORY_PATH = RESULTS_DIR / "attention_crnn_history.csv"
+ATTENTION_CRNN_ACC_PATH = RESULTS_DIR / "attention_crnn_accuracy.json"
+
 # All models accuracy path
 ALL_MODELS_ACC_PATH = RESULTS_DIR / "all_model_acc.json"
 
@@ -76,6 +81,7 @@ PREDICTIONS_DIR.mkdir(exist_ok=True)
 CNN_PREDICTIONS_PATH = PREDICTIONS_DIR / "cnn_predictions.json"
 RNN_PREDICTIONS_PATH = PREDICTIONS_DIR / "rnn_predictions.json"
 CRNN_PREDICTIONS_PATH = PREDICTIONS_DIR / "crnn_predictions.json"
+ATTENTION_CRNN_PREDICTIONS_PATH = PREDICTIONS_DIR / "attention_crnn_predictions.json"
 
 CNN_SCORES_PATH = PREDICTIONS_DIR / "cnn_scores.json"
 RNN_SCORES_PATH = PREDICTIONS_DIR / "rnn_scores.json"
@@ -120,6 +126,42 @@ SCORES_PATHS = {
 SAMPLE_RATE = 22050
 DURATION = 10
 NUM_SEGMENTS = 10
+
+# Model inference configuration
+# Adaptive thresholds for each model (auto-calibrated or manually set)
+MODEL_THRESHOLDS = {
+    "CNN": 0.5,      # Default threshold
+    "RNN": 0.5,      # Will be auto-calibrated if AUTO_CALIBRATE_THRESHOLDS=True
+    "CRNN": 0.5,
+}
+
+# Auto-calibration settings
+AUTO_CALIBRATE_THRESHOLDS = False  # Set to True to auto-calibrate on first performance calculation
+TARGET_RECALL = 0.95  # Target recall for threshold calibration (prefer false positives over false negatives)
+
+# Ensemble voting configuration
+# PHASE 2A: Optimized weights based on distance performance analysis
+# CRNN performs best at extreme distances (68% @ 100m vs CNN 15%)
+ENSEMBLE_WEIGHTS = {
+    "CNN": 0.30,   # Good at close range
+    "RNN": 0.10,   # Weakest performer (0% across all distances in Phase 1)
+    "CRNN": 0.60,  # Best at long distances, prioritize this model
+}
+
+# Distance-adaptive weights (optional, requires distance estimation)
+DISTANCE_ADAPTIVE_WEIGHTS = False
+DISTANCE_WEIGHT_CONFIG = {
+    "extreme": {"CNN": 0.2, "RNN": 0.0, "CRNN": 0.8},  # > 300m
+    "long": {"CNN": 0.3, "RNN": 0.1, "CRNN": 0.6},     # 150-300m
+    "medium": {"CNN": 0.4, "RNN": 0.2, "CRNN": 0.4},   # 75-150m
+    "close": {"CNN": 0.4, "RNN": 0.3, "CRNN": 0.3},    # < 75m
+}
+
+# Deployment constraints (Raspberry Pi 3B)
+RASPBERRY_PI_MODE = False  # Set to True for optimized inference on RPi3
+MAX_LATENCY_MS = 3000      # Maximum acceptable latency in milliseconds
+ENABLE_GPU = False         # RPi3 doesn't have GPU acceleration
+QUANTIZE_MODELS = False    # Enable INT8 quantization for faster inference
 
 # Convert Path objects to strings for compatibility
 def get_path_str(path):

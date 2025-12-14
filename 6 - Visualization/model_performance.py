@@ -57,9 +57,9 @@ def load_accuracy_data(model_name):
 
 def plot_training_curves():
     """Plot training and validation curves for all models."""
-    models = ['CNN', 'RNN', 'CRNN']
+    models = ['CNN', 'RNN', 'CRNN', 'Attention-CRNN']
     
-    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+    fig, axes = plt.subplots(2, 4, figsize=(24, 10))
     
     for idx, model_name in enumerate(models):
         history = load_training_history(model_name)
@@ -106,9 +106,9 @@ def plot_training_curves():
 
 def plot_confusion_matrices():
     """Plot confusion matrices for all models."""
-    models = ['CNN', 'RNN', 'CRNN']
+    models = ['CNN', 'RNN', 'CRNN', 'Attention-CRNN']
     
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    fig, axes = plt.subplots(1, 4, figsize=(24, 5))
     
     for idx, model_name in enumerate(models):
         acc_data = load_accuracy_data(model_name)
@@ -147,7 +147,7 @@ def plot_confusion_matrices():
 
 def plot_metrics_comparison():
     """Compare performance metrics across models."""
-    models = ['CNN', 'RNN', 'CRNN']
+    models = ['CNN', 'RNN', 'CRNN', 'Attention-CRNN']
     metrics_names = ['Accuracy', 'Precision', 'Recall', 'F1-Score']
     
     # Collect data
@@ -220,7 +220,7 @@ def plot_metrics_comparison():
 
 def generate_performance_table():
     """Generate a detailed performance comparison table."""
-    models = ['CNN', 'RNN', 'CRNN']
+    models = ['CNN', 'RNN', 'CRNN', 'Attention-CRNN']
     
     table_data = []
     

@@ -132,6 +132,115 @@ def calculate_snr(signal, noise):
     return snr_db
 
 
+def apply_doppler_shift(signal, sr, shift_range=0.5):
+    """
+    Apply Doppler shift to simulate drone movement (approaching/receding).
+    
+    Args:
+        signal: Audio signal (numpy array)
+        sr: Sample rate
+        shift_range: Maximum pitch shift in semitones (±shift_range)
+    
+    Returns:
+        tuple: (shifted_signal, shift_amount)
+    """
+    # Random shift between -shift_range and +shift_range
+    n_steps = np.random.uniform(-shift_range, shift_range)
+    
+    if abs(n_steps) > 0.05:  # Only apply if significant
+        shifted = librosa.effects.pitch_shift(signal, sr=sr, n_steps=n_steps)
+        return shifted, float(n_steps)
+    
+    return signal, 0.0
+
+
+def apply_intensity_modulation(signal, sr, mod_freq_range=(0.5, 2.0), depth=0.3):
+    """
+    Apply intensity modulation to simulate motor speed variations.
+    
+    Args:
+        signal: Audio signal (numpy array)
+        sr: Sample rate
+        mod_freq_range: Range of modulation frequency in Hz (min, max)
+        depth: Modulation depth (0 to 1, typically 0.2-0.4)
+    
+    Returns:
+        tuple: (modulated_signal, modulation_freq)
+    """
+    # Random modulation frequency
+    mod_freq = np.random.uniform(mod_freq_range[0], mod_freq_range[1])
+    
+    # Create time array
+    duration = len(signal) / sr
+    t = np.linspace(0, duration, len(signal))
+    
+    # Create modulation envelope (sinusoidal)
+    envelope = 1.0 - depth + depth * np.sin(2 * np.pi * mod_freq * t)
+    
+    # Apply modulation
+    modulated = signal * envelope
+    
+    return modulated, float(mod_freq)
+
+
+def apply_reverberation(signal, sr, delay_range=(50, 200), decay_range=(0.2, 0.4)):
+    """
+    Apply simple reverberation (echo) to simulate environment reflections.
+    
+    Args:
+        signal: Audio signal (numpy array)
+        sr: Sample rate
+        delay_range: Range of echo delay in milliseconds (min, max)
+        decay_range: Range of echo decay factor (min, max)
+    
+    Returns:
+        tuple: (reverb_signal, delay_ms, decay)
+    """
+    # Random delay and decay
+    delay_ms = np.random.randint(delay_range[0], delay_range[1])
+    decay = np.random.uniform(decay_range[0], decay_range[1])
+    
+    # Convert delay to samples
+    delay_samples = int(delay_ms * sr / 1000)
+    
+    # Create echo
+    echo = np.zeros_like(signal)
+    if delay_samples < len(signal):
+        echo[delay_samples:] = signal[:-delay_samples] * decay
+    
+    # Mix original + echo
+    reverb = signal + echo
+    
+    # Normalize to prevent clipping
+    peak = np.max(np.abs(reverb))
+    if peak > 1.0:
+        reverb = reverb / peak
+    
+    return reverb, int(delay_ms), float(decay)
+
+
+def apply_time_stretch_variation(signal, sr, rate_range=(0.95, 1.05)):
+    """
+    Apply time stretching to simulate rotor speed variations.
+    
+    Args:
+        signal: Audio signal (numpy array)
+        sr: Sample rate
+        rate_range: Range of stretch rate (min, max), 1.0 = no change
+    
+    Returns:
+        tuple: (stretched_signal, stretch_rate)
+    """
+    # Random stretch rate
+    rate = np.random.uniform(rate_range[0], rate_range[1])
+    
+    if abs(rate - 1.0) > 0.01:  # Only apply if significant
+        stretched = librosa.effects.time_stretch(signal, rate=rate)
+        return stretched, float(rate)
+    
+    return signal, 1.0
+
+
 def apply_audio_effects(signal, sr, category_config):
     """
     Apply audio effects (pitch shift, time stretch) to signal.
@@ -166,32 +275,87 @@ def apply_audio_effects(signal, sr, category_config):
     return processed, metadata
 
 
-def mix_drone_with_noise(drone_signal, noise_signals, target_snr_db, config):
+def mix_drone_with_noise(drone_signal, noise_signals, target_snr_db, config, sr=22050):
     """
     Mix drone audio with background noises at specified SNR.
+    Applies advanced augmentations (Doppler, modulation, reverb, time stretch) to drone signal.
     
     Args:
         drone_signal: Drone audio (numpy array)
         noise_signals: List of noise audio signals (list of numpy arrays)
         target_snr_db: Target Signal-to-Noise Ratio in dB
         config: Configuration dict with audio parameters
+        sr: Sample rate
     
     Returns:
         tuple: (mixed_signal, actual_snr_db, metadata)
     """
+    metadata = {}
+    augmented_drone = drone_signal.copy()
+    
+    # Apply advanced augmentations if enabled
+    advanced_config = config.get('advanced_augmentations', {})
+    
+    if advanced_config.get('enabled', False):
+        # 1. Doppler Shift (50% probability)
+        if advanced_config.get('doppler_shift', {}).get('enabled', False) and np.random.rand() < 0.5:
+            shift_range = advanced_config['doppler_shift'].get('range', [-0.5, 0.5])
+            max_shift = max(abs(shift_range[0]), abs(shift_range[1]))
+            augmented_drone, doppler = apply_doppler_shift(augmented_drone, sr, shift_range=max_shift)
+            metadata['doppler_shift_semitones'] = doppler
+        
+        # 2. Intensity Modulation (40% probability)
+        if advanced_config.get('intensity_modulation', {}).get('enabled', False) and np.random.rand() < 0.4:
+            freq_range = advanced_config['intensity_modulation'].get('freq_range', [0.5, 2.0])
+            depth = advanced_config['intensity_modulation'].get('depth', 0.3)
+            augmented_drone, mod_freq = apply_intensity_modulation(augmented_drone, sr, 
+                                                                    mod_freq_range=tuple(freq_range), 
+                                                                    depth=depth)
+            metadata['intensity_modulation_hz'] = mod_freq
+        
+        # 3. Reverberation (30% probability)
+        if advanced_config.get('reverberation', {}).get('enabled', False) and np.random.rand() < 0.3:
+            delay_range = advanced_config['reverberation'].get('delay_range', [50, 200])
+            decay_range = advanced_config['reverberation'].get('decay_range', [0.2, 0.4])
+            augmented_drone, delay, decay = apply_reverberation(augmented_drone, sr, 
+                                                                 delay_range=tuple(delay_range), 
+                                                                 decay_range=tuple(decay_range))
+            metadata['reverb_delay_ms'] = delay
+            metadata['reverb_decay'] = decay
+        
+        # 4. Time Stretch (20% probability)
+        if advanced_config.get('time_stretch', {}).get('enabled', False) and np.random.rand() < 0.2:
+            rate_range = advanced_config['time_stretch'].get('rate_range', [0.95, 1.05])
+            augmented_drone, stretch_rate = apply_time_stretch_variation(augmented_drone, sr, 
+                                                                          rate_range=tuple(rate_range))
+            metadata['time_stretch_rate'] = stretch_rate
+            
+            # Ensure duration matches after stretch
+            if len(augmented_drone) != len(drone_signal):
+                if len(augmented_drone) > len(drone_signal):
+                    augmented_drone = augmented_drone[:len(drone_signal)]
+                else:
+                    augmented_drone = np.pad(augmented_drone, (0, len(drone_signal) - len(augmented_drone)))
+    
     # Combine multiple noise signals (average)
-    combined_noise = np.zeros_like(drone_signal)
+    combined_noise = np.zeros_like(augmented_drone)
     for noise in noise_signals:
+        # Ensure noise matches drone length
+        if len(noise) != len(augmented_drone):
+            if len(noise) > len(augmented_drone):
+                noise = noise[:len(augmented_drone)]
+            else:
+                noise = np.pad(noise, (0, len(augmented_drone) - len(noise)))
         combined_noise += noise
     combined_noise /= len(noise_signals)
     
     # Calculate powers
-    signal_power = np.mean(drone_signal**2)
+    signal_power = np.mean(augmented_drone**2)
     noise_power = np.mean(combined_noise**2)
     
     # Avoid division by zero
     if signal_power == 0 or noise_power == 0:
-        return drone_signal + combined_noise, 0, {"warning": "Zero power detected"}
+        return augmented_drone + combined_noise, 0, {"warning": "Zero power detected"}
     
     # Calculate target noise power based on desired SNR
     # SNR (dB) = 10 * log10(P_signal / P_noise)
@@ -209,8 +373,8 @@ def mix_drone_with_noise(drone_signal, noise_signals, target_snr_db, config):
         variation_factor = 10**(variation_linear / 20)
         scaled_noise *= variation_factor
     
-    # Mix signals
-    mixed = drone_signal + scaled_noise
+    # Mix signals (augmented drone + noise)
+    mixed = augmented_drone + scaled_noise
     
     # Normalize to prevent clipping
     max_amplitude = config['audio_parameters']['max_amplitude']
@@ -220,16 +384,16 @@ def mix_drone_with_noise(drone_signal, noise_signals, target_snr_db, config):
             mixed = mixed * (max_amplitude / peak)
     
     # Calculate actual achieved SNR
-    actual_snr = calculate_snr(drone_signal, scaled_noise)
+    actual_snr = calculate_snr(augmented_drone, scaled_noise)
     
-    # Metadata
-    metadata = {
+    # Metadata (merge with augmentation metadata)
+    metadata.update({
         "target_snr_db": target_snr_db,
         "actual_snr_db": float(actual_snr),
         "num_noise_sources": len(noise_signals),
         "normalized": config['audio_parameters']['enable_normalization'],
         "peak_amplitude": float(np.max(np.abs(mixed)))
-    }
+    })
     
     return mixed, actual_snr, metadata
 
@@ -378,12 +542,13 @@ def generate_drone_augmented_samples(config, drone_files, no_drone_files, output
                     stats['categories'][cat_name]['errors'] += 1
                     continue
                 
-                # Mix drone with noise at target SNR
+                # Mix drone with noise at target SNR (with advanced augmentations)
                 mixed_signal, actual_snr, mix_metadata = mix_drone_with_noise(
                     drone_signal,
                     noise_signals,
                     category['snr_db'],
-                    config
+                    config,
+                    sr=sr
                 )
                 
                 # Save mixed audio

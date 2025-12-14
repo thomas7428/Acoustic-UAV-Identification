@@ -4,9 +4,44 @@ import math
 import json
 import warnings
 import numpy as np
+import argparse
 
 # Suppress the librosa warning about n_fft being too large
 warnings.filterwarnings('ignore', message='n_fft=.*is too large for input signal of length=.*')
+
+
+def spec_augment(mel_spec, time_mask_width=10, freq_mask_width=8, num_masks=2):
+    """
+    SpecAugment: Mask random time/frequency bands to improve robustness.
+    
+    Args:
+        mel_spec: Mel spectrogram (time_steps, n_mels)
+        time_mask_width: Maximum width of time mask in frames
+        freq_mask_width: Maximum width of frequency mask in mel bins
+        num_masks: Number of masks to apply for each type
+    
+    Returns:
+        Augmented mel spectrogram
+    
+    Reference:
+        Park et al. "SpecAugment" (2019) https://arxiv.org/abs/1904.08779
+    """
+    augmented = mel_spec.copy()
+    time_steps, n_mels = augmented.shape
+    
+    # Time masking (mask temporal columns)
+    for _ in range(num_masks):
+        if time_steps > time_mask_width:
+            t = np.random.randint(0, time_steps - time_mask_width)
+            augmented[t:t+time_mask_width, :] = augmented.mean()
+    
+    # Frequency masking (mask mel bins)
+    for _ in range(num_masks):
+        if n_mels > freq_mask_width:
+            f = np.random.randint(0, n_mels - freq_mask_width)
+            augmented[:, f:f+freq_mask_width] = augmented.mean()
+    
+    return augmented
 
 # Import configuration from centralized config
 import sys
@@ -78,6 +113,14 @@ def save_mfcc(dataset_path, json_path, n_mels=90, n_fft=2048, hop_length=512, nu
                                                          hop_length=hop_length)
                     db_mel = librosa.power_to_db(mel)
                     mel = db_mel.T
+                    
+                    # Apply SpecAugment with 50% probability (configurable via global)
+                    if hasattr(save_mfcc, 'apply_spec_augment') and save_mfcc.apply_spec_augment:
+                        if np.random.rand() < 0.5:
+                            mel = spec_augment(mel, 
+                                             time_mask_width=10, 
+                                             freq_mask_width=8, 
+                                             num_masks=2)
 
                     # Stores mels for segment, if it has the expected length.
                     if len(mel) == expected_num_mel_vectors_per_segment:
@@ -90,5 +133,31 @@ def save_mfcc(dataset_path, json_path, n_mels=90, n_fft=2048, hop_length=512, nu
 
 
 if __name__ == "__main__":
-    save_mfcc(DATASET_PATH, JSON_PATH, num_segments=10)
-    # num_segments can be changed. 10 with 10 second audio equates to a segment equalling 1 second.
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(description='Extract Mel spectrograms with optional SpecAugment')
+    parser.add_argument('--spec_augment', action='store_true', 
+                       help='Apply SpecAugment (time/frequency masking) to 50%% of samples')
+    parser.add_argument('--num_segments', type=int, default=10,
+                       help='Number of segments per audio file (default: 10)')
+    args = parser.parse_args()
+    
+    # Configure SpecAugment
+    save_mfcc.apply_spec_augment = args.spec_augment
+    
+    # Display configuration
+    print("\n" + "="*60)
+    print("🎵 MEL SPECTROGRAM FEATURE EXTRACTION")
+    print("="*60)
+    print(f"📂 Dataset: {DATASET_PATH}")
+    print(f"💾 Output: {JSON_PATH}")
+    print(f"🔊 Sample Rate: {SAMPLE_RATE} Hz")
+    print(f"⏱️  Duration: {DURATION} seconds")
+    print(f"🔪 Segments: {args.num_segments}")
+    print(f"🎭 SpecAugment: {'✅ ENABLED (50% probability)' if args.spec_augment else '❌ DISABLED'}")
+    print("="*60 + "\n")
+    
+    save_mfcc(DATASET_PATH, JSON_PATH, num_segments=args.num_segments)
+    
+    print("\n" + "="*60)
+    print("✅ Feature extraction complete!")
+    print("="*60)

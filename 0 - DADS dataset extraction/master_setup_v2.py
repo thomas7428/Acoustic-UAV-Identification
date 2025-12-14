@@ -78,6 +78,44 @@ def print_info(message):
     print(f"{colors.BLUE}ℹ {message}{colors.ENDC}")
 
 
+def cleanup_directories(script_dir, dry_run=False):
+    """
+    Clean up existing dataset directories to prevent contamination.
+    
+    Args:
+        script_dir: Script directory path
+        dry_run: If True, only show what would be deleted
+    
+    Returns:
+        bool: Always True
+    """
+    print_info("Cleaning up existing dataset directories...")
+    
+    dirs_to_clean = [
+        'dataset_test',
+        'dataset_augmented', 
+        'dataset_combined',
+        'dataset_train',
+        'dataset_val',
+        'extracted_features'
+    ]
+    
+    for dir_name in dirs_to_clean:
+        dir_path = script_dir / dir_name
+        if dir_path.exists():
+            if dry_run:
+                print(f"  Would delete: {dir_path}")
+            else:
+                print(f"  Deleting: {dir_path}")
+                shutil.rmtree(dir_path)
+                print_success(f"Cleaned {dir_name}/")
+        else:
+            print(f"  {dir_name}/ not found (skip)")
+    
+    print()
+    return True
+
+
 def run_command(cmd, cwd=None, dry_run=False):
     """
     Execute a shell command and return success status.
@@ -408,6 +446,8 @@ Examples:
     # Execution mode
     parser.add_argument('--dry-run', action='store_true',
                         help='Perform dry run without creating files')
+    parser.add_argument('--no-cleanup', action='store_true',
+                        help='Skip cleanup (keep existing datasets - may cause contamination)')
     
     args = parser.parse_args()
     
@@ -425,6 +465,14 @@ Examples:
     if not check_requirements(script_dir):
         print_error("\nSetup aborted due to missing requirements")
         return 1
+    
+    # Step 0: Cleanup (unless disabled)
+    if not args.no_cleanup:
+        print_step(0, 6, "Cleanup Existing Datasets")
+        cleanup_directories(script_dir, args.dry_run)
+    else:
+        print_warning("Skipping cleanup - Existing datasets will be REUSED (risk of contamination!)")
+        print()
     
     # Validate ratios
     total_ratio = args.train + args.val + args.test

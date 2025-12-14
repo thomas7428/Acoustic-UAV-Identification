@@ -98,7 +98,8 @@ def Keyword_Spotting_Service():
     # Ensure an instance is created only the first time the factory function is called.
     if _Class_Predict_Service._instance is None:
         _Class_Predict_Service._instance = _Class_Predict_Service()
-        _Class_Predict_Service.model = tf.keras.models.load_model(SAVED_MODEL_PATH)
+        # Load model without compiling (skip custom loss function deserialization)
+        _Class_Predict_Service.model = tf.keras.models.load_model(SAVED_MODEL_PATH, compile=False)
     return _Class_Predict_Service._instance
 
 
