@@ -51,6 +51,8 @@ SKIP_FEATURES=false
 PARALLEL=false
 SKIP_VISUALIZATIONS=false
 KEEP_LOGS=false
+FORCE_FEATURES=false
+FORCE_RETEST=false
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_PATH="$PROJECT_DIR/.venv/bin/python"
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
@@ -72,12 +74,20 @@ while [[ $# -gt 0 ]]; do
             SKIP_FEATURES=true
             shift
             ;;
+        --force-features)
+            FORCE_FEATURES=true
+            shift
+            ;;
         --parallel)
             PARALLEL=true
             shift
             ;;
         --no-visualizations)
             SKIP_VISUALIZATIONS=true
+            shift
+            ;;
+        --force-retest)
+            FORCE_RETEST=true
             shift
             ;;
         --keep-logs)
@@ -201,11 +211,15 @@ run_dataset_generation() {
     log STEP "STEP 1/5: Dataset Generation & Augmentation"
     log INFO "Running master_setup_v2.py (with cleanup)..."
     log INFO "This will DELETE existing datasets to prevent contamination"
+    log INFO "Config File: $CONFIG_FILE"
     
     cd "$PROJECT_DIR/0 - DADS dataset extraction"
     
-    # Run with cleanup by default (no --no-cleanup flag)
-    if "$VENV_PATH" master_setup_v2.py 2>&1 | tee -a "$LOG_FILE"; then
+    # Extract just the filename from CONFIG_FILE path
+    CONFIG_BASENAME=$(basename "$CONFIG_FILE")
+    
+    # Run with cleanup by default (no --no-cleanup flag) and pass config
+    if "$VENV_PATH" master_setup_v2.py --config "$CONFIG_BASENAME" 2>&1 | tee -a "$LOG_FILE"; then
         log SUCCESS "Dataset generation completed"
     else
         log ERROR "Dataset generation failed"
@@ -449,7 +463,12 @@ run_visualizations() {
     cd "$PROJECT_DIR/6 - Visualization"
     
     log INFO "Running all visualization scripts..."
-    if "$VENV_PATH" run_all_visualizations.py 2>&1 | tee -a "$LOG_FILE"; then
+    VIS_CMD="$VENV_PATH run_all_visualizations.py"
+    if [ "$FORCE_RETEST" = true ]; then
+        VIS_CMD="$VIS_CMD --force-retest"
+    fi
+
+    if eval "$VIS_CMD" 2>&1 | tee -a "$LOG_FILE"; then
         log SUCCESS "All visualizations generated"
     else
         log WARN "Some visualizations may have failed"
@@ -561,8 +580,16 @@ main() {
         run_dataset_generation
     fi
     
+    # Feature extraction: skip if precomputed features exist unless forced
     if [ "$SKIP_FEATURES" = false ]; then
-        run_feature_extraction
+        FEATURES_DIR="$PROJECT_DIR/0 - DADS dataset extraction/extracted_features"
+        if [ "$FORCE_FEATURES" = false ] && [ -d "$FEATURES_DIR" ] && ls "$FEATURES_DIR"/*.json >/dev/null 2>&1; then
+            log INFO "Precomputed features detected in $FEATURES_DIR - skipping feature extraction (use --force-features to re-run)"
+        else
+            run_feature_extraction
+        fi
+    else
+        log INFO "Skipping feature extraction (--skip-features flag)"
     fi
     
     run_model_training

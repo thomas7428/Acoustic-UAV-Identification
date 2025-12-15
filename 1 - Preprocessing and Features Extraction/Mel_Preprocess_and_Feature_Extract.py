@@ -156,7 +156,21 @@ if __name__ == "__main__":
     print(f"🎭 SpecAugment: {'✅ ENABLED (50% probability)' if args.spec_augment else '❌ DISABLED'}")
     print("="*60 + "\n")
     
-    save_mfcc(DATASET_PATH, JSON_PATH, num_segments=args.num_segments)
+    # Use centralized config defaults where available
+    try:
+        import config
+        default_n_mels = config.MEL_N_MELS
+        default_n_fft = config.MEL_N_FFT
+        default_hop = config.MEL_HOP_LENGTH
+        default_segments = config.NUM_SEGMENTS
+    except Exception:
+        default_n_mels = 90
+        default_n_fft = 2048
+        default_hop = 512
+        default_segments = args.num_segments
+
+    save_mfcc(DATASET_PATH, JSON_PATH, n_mels=default_n_mels, n_fft=default_n_fft,
+              hop_length=default_hop, num_segments=default_segments)
     
     print("\n" + "="*60)
     print("✅ Feature extraction complete!")

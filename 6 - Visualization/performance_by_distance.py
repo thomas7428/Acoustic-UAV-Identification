@@ -28,6 +28,8 @@ from collections import defaultdict
 import librosa
 import math
 import warnings
+import re
+import argparse
 
 # Suppress warnings
 warnings.filterwarnings('ignore', message='n_fft=.*is too large for input signal of length=.*')
@@ -59,6 +61,7 @@ AUGMENT_CONFIG_PATH = Path(__file__).parent.parent / "0 - DADS dataset extractio
 DATASET_COMBINED_PATH = Path(__file__).parent.parent / "0 - DADS dataset extraction" / "dataset_combined"
 FEATURES_JSON_PATH = Path(__file__).parent.parent / "0 - DADS dataset extraction" / "extracted_features" / "mel_pitch_shift_9.0.json"
 OUTPUT_DIR = Path(__file__).parent / "outputs"
+TEST_INDEX_PATH = Path(__file__).parent.parent / "0 - DADS dataset extraction" / "extracted_features" / "mel_test_index.json"
 
 
 def load_augmentation_config():
@@ -149,6 +152,88 @@ def get_categories_from_config(aug_config):
     return categories
 
 
+def detect_categories_from_files(categories):
+    """Detect additional categories present in the dataset files that are not declared in the config.
+
+    This scans `DATASET_COMBINED_PATH` (both class folders) for file name patterns like
+    `aug_drone_600m_...wav` and registers a category `drone_600m` when found.
+    For detected drone distance categories we set a synthetic `snr_db` value equal to
+    negative distance (e.g. 600m -> -600) so ordering remains consistent (more negative = harder).
+    """
+    detected = set()
+
+    if not DATASET_COMBINED_PATH.exists():
+        return categories
+
+    pattern = re.compile(r"aug_([a-z0-9_]+)_")
+
+    for class_dir in ['0', '1']:
+        class_path = DATASET_COMBINED_PATH / class_dir
+        if not class_path.exists():
+            continue
+        for f in class_path.glob('*.wav'):
+            m = pattern.search(f.name)
+            if m:
+                detected.add(m.group(1))
+
+    # Add detected categories that are missing in config
+    for name in sorted(detected):
+        if name in categories:
+            continue
+
+        # Build a display name
+        display_name = name.replace('drone_', '').replace('_', ' ')
+
+        # Attempt to extract distance in meters (drone_600m -> 600)
+        distance_m = None
+        m = re.search(r'drone_(\d+)m', name)
+        if m:
+            distance_m = int(m.group(1))
+            # We DO NOT assume distance == dB. Keep snr_db unknown and store distance_m
+            snr_db = float('nan')
+            # Try to find snr_db in any available augment_config files (v2, v3, custom)
+            try:
+                cfg_dir = Path(__file__).parent.parent / "0 - DADS dataset extraction"
+                for cfg_file in sorted(cfg_dir.glob('augment_config*.json')):
+                    try:
+                        with open(cfg_file, 'r') as cf:
+                            cfg = json.load(cf)
+                        # Look under drone_augmentation.categories or drone_augmentation.categories list
+                        drone_section = cfg.get('drone_augmentation', {})
+                        cats = drone_section.get('categories', [])
+                        for cat in cats:
+                            if cat.get('name') == name:
+                                snr_db = cat.get('snr_db', float('nan'))
+                                break
+                        if np.isfinite(snr_db) or (not np.isnan(snr_db) and snr_db is not None):
+                            break
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+        else:
+            snr_db = float('nan')
+
+        if distance_m is not None:
+            if np.isfinite(snr_db):
+                display = f"{distance_m}m ({int(snr_db):+d}dB)"
+            else:
+                display = f"{distance_m}m (distance only)"
+
+        categories[name] = {
+            'name': name,
+            'display_name': display,
+            'snr_db': snr_db,
+            'proportion': 0,
+            'description': 'Detected from dataset files (not present in config)',
+            'label': 1 if name.startswith('drone_') else 0,
+            'file_pattern': f"aug_{name}_",
+            'distance_m': distance_m
+        }
+
+    return categories
+
+
 def get_category_files(categories):
     """
     Get all audio files for each category from dataset_combined.
@@ -194,22 +279,42 @@ def get_category_files(categories):
 
 def load_precomputed_features():
     """Load pre-computed MEL features from JSON file."""
+    # Prefer the per-file test index (one MEL per audio file) when available.
+    if TEST_INDEX_PATH.exists():
+        try:
+            print(f"[INFO] Loading test-indexed features from {TEST_INDEX_PATH}...")
+            with open(TEST_INDEX_PATH, 'r') as f:
+                data = json.load(f)
+
+            # Expect keys: 'mapping' (optional), 'names', 'mel', 'labels' (optional)
+            print(f"[OK] Loaded test index with {len(data.get('names', []))} entries")
+            return {'test_index': data}
+        except Exception as e:
+            print(f"[WARNING] Failed to load test index {TEST_INDEX_PATH}: {e}")
+
+    # If we reach here, no test-index present. If PRECOMPUTED_ONLY is enforced, abort.
+    if getattr(config, 'PRECOMPUTED_ONLY', False):
+        print(f"[ERROR] PRECOMPUTED_ONLY mode enabled but test index not found at {TEST_INDEX_PATH}")
+        return None
+
+    # Fallback to the large segmented features JSON (multiple segments per file)
     if not FEATURES_JSON_PATH.exists():
         print(f"[ERROR] Features JSON not found: {FEATURES_JSON_PATH}")
         return None
-    
+
     try:
         print(f"[INFO] Loading pre-computed features from {FEATURES_JSON_PATH}...")
         with open(FEATURES_JSON_PATH, 'r') as f:
             data = json.load(f)
-        
-        mel_features = np.array(data['mel'])  # Shape: (48000, 44, 90)
-        labels = np.array(data['labels'])
-        
-        print(f"[OK] Loaded {len(mel_features)} pre-computed MEL features")
-        print(f"[INFO] Feature shape: {mel_features[0].shape}")
-        
-        return {'features': mel_features, 'labels': labels}
+
+        mel_features = np.array(data.get('mel', []))  # Shape: (N_segments, 44, 90)
+        labels = np.array(data.get('labels', []))
+
+        print(f"[OK] Loaded {len(mel_features)} pre-computed MEL feature segments")
+        if len(mel_features) > 0:
+            print(f"[INFO] Feature shape: {mel_features[0].shape}")
+
+        return {'features': mel_features, 'labels': labels, 'mapping': data.get('mapping')}
     except Exception as e:
         print(f"[ERROR] Failed to load features: {e}")
         return None
@@ -229,7 +334,19 @@ def load_models():
     for name, path in model_paths.items():
         if path.exists():
             try:
-                models[name] = keras.models.load_model(path, compile=False)
+                # Try to load with fallback custom_objects for custom loss function if present
+                custom_objects = None
+                try:
+                    from loss_functions import get_loss_function
+                    fallback_loss = get_loss_function('recall_focused', fn_penalty=50.0)
+                    custom_objects = {'loss_fn': fallback_loss}
+                except Exception:
+                    custom_objects = None
+
+                if custom_objects:
+                    models[name] = keras.models.load_model(path, custom_objects=custom_objects, compile=False)
+                else:
+                    models[name] = keras.models.load_model(path, compile=False)
                 print(f"[OK] Loaded {name} model")
             except Exception as e:
                 print(f"[WARNING] Failed to load {name}: {e}")
@@ -257,30 +374,37 @@ def get_precomputed_features_for_file(file_path, precomputed_data, num_segments=
     n_fft = 2048
     hop_length = 512
     
-    # Load audio - EXACTLY 4 seconds like training
-    audio, sr = librosa.load(file_path, sr=SAMPLE_RATE, duration=4.0)
-    
-    # Compute mel spectrogram
-    mel = librosa.feature.melspectrogram(y=audio, 
-                                        sr=sr,
-                                        n_fft=n_fft,
-                                        hop_length=hop_length,
-                                        n_mels=n_mels)
-    
-    # Convert to dB
-    mel_db = librosa.power_to_db(mel, ref=np.max)
-    
-    # Pad or trim to exactly 90 time steps (matching training)
-    if mel_db.shape[1] < 90:
-        mel_db = np.pad(mel_db, ((0, 0), (0, 90 - mel_db.shape[1])), mode='constant')
-    else:
-        mel_db = mel_db[:, :90]
-    
-    # Return shape (44, 90) - NO segments, single prediction like training
+    # ONLY use precomputed per-file MELs. Do NOT compute on-the-fly here.
+    if not precomputed_data or 'test_index' not in precomputed_data:
+        raise RuntimeError(
+            "Precomputed test index not available. Rebuild `mel_test_index.json` and retry."
+        )
+
+    test_index = precomputed_data['test_index']
+    names = test_index.get('names', [])
+    if not names:
+        raise RuntimeError("Precomputed test index contains no names; rebuild `mel_test_index.json`.")
+
+    fname = file_path.name
+    try:
+        idx = names.index(fname)
+    except ValueError:
+        raise RuntimeError(f"File '{fname}' not found in precomputed test index. Rebuild the index to include this file.")
+
+    mel_db = np.array(test_index['mel'][idx]).astype(float)
+
+    # Enforce exact trainer shape: (n_mels, 90)
+    expected_shape = (n_mels, 90)
+    if mel_db.shape != expected_shape:
+        raise RuntimeError(
+            f"Precomputed MEL for '{fname}' has shape {mel_db.shape}; expected {expected_shape}.\n"
+            "Do not modify precomputed MELs in-place — rebuild `mel_test_index.json` using the trainer's extraction settings."
+        )
+
     return mel_db
 
 
-def evaluate_model_on_category(model, model_name, files, precomputed_data, feature_type='mel'):
+def evaluate_model_on_category(model, model_name, files, precomputed_data, feature_type='mel', thresholds=None):
     """
     Evaluate a model on files from a specific category.
     
@@ -298,6 +422,7 @@ def evaluate_model_on_category(model, model_name, files, precomputed_data, featu
     
     predictions = []
     labels = []
+    file_names = []
     
     for file_path in files:
         try:
@@ -320,32 +445,42 @@ def evaluate_model_on_category(model, model_name, files, precomputed_data, featu
             
             # Predict - single prediction, no averaging
             pred = model.predict(features, verbose=0)
-            
+
             # Extract prediction from batch dimension
-            pred = pred[0]  # (1, 2) -> (2)
-            
-            # CALIBRATED THRESHOLDS (from threshold calibration analysis)
-            # Models require higher confidence to predict DRONE (reduce FP rate)
-            optimal_thresholds = {
-                'CNN': 0.85,           # Baseline: 92.1% F1 → Optimal: 94.9% F1
-                'RNN': 0.95,           # Baseline: 76.2% F1 → Optimal: 90.2% F1 (biggest gain)
-                'CRNN': 0.90,          # Baseline: 87.4% F1 → Optimal: 93.4% F1
-                'Attention-CRNN': 0.95 # Baseline: 88.1% F1 → Optimal: 94.1% F1
-            }
-            
-            threshold = optimal_thresholds.get(model_name, 0.5)
-            drone_prob = pred[1]  # Probability of class 1 (DRONE)
-            
-            # Apply calibrated threshold
-            pred_label = 1 if drone_prob >= threshold else 0
-            
-            # Debug first few predictions
+            pred = pred[0]  # (1, 2) -> (2) or (1)
+
+            # If thresholds provided, apply per-model threshold on the positive-class score
+            pred_label = None
+            if thresholds and model_name in thresholds:
+                # Extract positive-class score
+                p = np.array(pred)
+                if p.size == 1:
+                    pos = float(p[0])
+                else:
+                    pos = float(p[1])
+                thr = thresholds[model_name].get('best_threshold', 0.5)
+                pred_label = int(pos >= thr)
+                predicted_index = 1 if pred_label == 1 else 0
+            else:
+                # Use hard argmax-style prediction (legacy behavior)
+                try:
+                    predicted_index = int(np.argmax(pred))
+                except Exception:
+                    predicted_index = int(np.array(pred) >= 0.5)
+                pred_label = int(predicted_index)
+
+            # Debug first few predictions (show raw scores and chosen index)
             if len(predictions) < 3:
+                try:
+                    raw_scores_display = np.array(pred)
+                except Exception:
+                    raw_scores_display = pred
                 print(f"\n  [DEBUG] File: {file_path.name}, True label: {true_label}")
-                print(f"  [DEBUG] Features shape: {features.shape}, drone_prob: {drone_prob:.3f}, threshold: {threshold:.2f}, pred_label: {pred_label}")
+                print(f"  [DEBUG] Features shape: {features.shape}, raw_scores: {raw_scores_display}, predicted_index: {predicted_index}, pred_label: {pred_label}")
             
             predictions.append(pred_label)
             labels.append(true_label)
+            file_names.append(file_path.name)
             
         except Exception as e:
             print(f"\n[WARNING] Error processing {file_path.name}: {e}")
@@ -385,11 +520,12 @@ def evaluate_model_on_category(model, model_name, files, precomputed_data, featu
         'recall': recall,
         'f1': f1,
         'predictions': predictions,
-        'labels': labels
+        'labels': labels,
+        'file_names': file_names
     }
 
 
-def test_models_by_distance(categories, category_files):
+def test_models_by_distance(categories, category_files, force_retest=False, thresholds=None):
     """Test all models on each distance category."""
     print("[1/3] Loading pre-computed features...")
     precomputed_data = load_precomputed_features()
@@ -417,14 +553,43 @@ def test_models_by_distance(categories, category_files):
         # All models use mel spectrograms in this project
         feature_type = 'mel'
         
-        for cat_name, cat_data in category_files.items():
+        # If a per-model by-category cached file exists and re-test not forced, load it
+        model_key = model_name.lower().replace('-', '_')
+        by_category_path = config.PREDICTIONS_DIR / f"{model_key}_by_category.json"
+        if by_category_path.exists() and not force_retest:
+            try:
+                with open(by_category_path, 'r') as f:
+                    loaded = json.load(f)
+                # loaded should be a mapping cat_name -> results per category
+                results[model_name] = loaded
+                print(f"[SKIP] Loaded cached per-category results for {model_name}: {by_category_path}")
+                continue
+            except Exception as e:
+                print(f"[WARNING] Failed to load cached results {by_category_path}: {e}")
+
+        # Sort categories in SNR-proportional order for testing: finite snr_db first (ascending),
+        # then detected distances (farther first), then any remaining categories.
+        def _cat_sort(item):
+            cat_name, cat_data = item
+            snr = cat_data.get('snr_db', float('nan'))
+            dist = cat_data.get('distance_m', None)
+            if np.isfinite(snr):
+                return (0, float(snr))
+            elif dist is not None:
+                return (1, -int(dist))
+            else:
+                return (2, 0)
+
+        sorted_cats = sorted(list(category_files.items()), key=_cat_sort)
+
+        for cat_name, cat_data in sorted_cats:
             files = cat_data['files']
             display_name = cat_data['display_name']
-            
+
             print(f"{display_name:25s} ({len(files):4d} files): ", end='')
-            
+
             # Limit to 100 files for speed
-            result = evaluate_model_on_category(model, model_name, files[:100], precomputed_data, feature_type)
+            result = evaluate_model_on_category(model, model_name, files[:100], precomputed_data, feature_type, thresholds=thresholds)
             
             if result:
                 results[model_name][cat_name] = {
@@ -432,6 +597,157 @@ def test_models_by_distance(categories, category_files):
                     'display_name': display_name,
                     'snr_db': cat_data['snr_db']
                 }
+
+        # After testing (or loading cached results), produce canonical outputs for this model
+        try:
+            # Build aggregated lists in the same order as categories were iterated
+            agg_names = []
+            agg_preds = []
+            agg_labels = []
+
+            # Use the same SNR-proportional ordering for aggregation to keep canonical outputs consistent
+            ordered_cat_names = [cn for cn, _ in sorted_cats]
+            for cat_name in ordered_cat_names:
+                if cat_name in results[model_name]:
+                    entry = results[model_name][cat_name]
+                    # Expect entry to contain 'file_names', 'predictions', 'labels'
+                    fns = entry.get('file_names') or []
+                    ps = entry.get('predictions') or []
+                    ls = entry.get('labels') or []
+                    agg_names.extend(fns)
+                    agg_preds.extend(ps)
+                    agg_labels.extend(ls)
+
+            # If we have no aggregated predictions, skip writing
+            if agg_names:
+                model_key = model_name.lower().replace('-', '_')
+                # Prediction file (names, mapping, predictions, labels)
+                pred_out = {
+                    'mapping': ['0', '1'],
+                    'names': agg_names,
+                    'predictions': agg_preds,
+                    'labels': agg_labels
+                }
+
+                pred_path = getattr(config, f"{model_key.upper()}_PREDICTIONS_PATH", None)
+                if pred_path is None:
+                    pred_path = config.PREDICTIONS_DIR / f"{model_key}_predictions.json"
+                pred_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(pred_path, 'w') as f:
+                    json.dump(pred_out, f, indent=4)
+                print(f"[OK] Saved predictions: {pred_path}")
+
+                # Scores file (newer flat format with confusion_matrix dict)
+                TP = int(sum(1 for p, l in zip(agg_preds, agg_labels) if p == 1 and l == 1))
+                FN = int(sum(1 for p, l in zip(agg_preds, agg_labels) if p == 0 and l == 1))
+                TN = int(sum(1 for p, l in zip(agg_preds, agg_labels) if p == 0 and l == 0))
+                FP = int(sum(1 for p, l in zip(agg_preds, agg_labels) if p == 1 and l == 0))
+
+                total = TP + TN + FP + FN
+                accuracy = float((TP + TN) / total) if total > 0 else 0.0
+                precision = float(TP / (TP + FP)) if (TP + FP) > 0 else 0.0
+                recall = float(TP / (TP + FN)) if (TP + FN) > 0 else 0.0
+                f1 = float((2 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0.0)
+
+                scores_out = {
+                    'confusion_matrix': {'TP': TP, 'FN': FN, 'TN': TN, 'FP': FP},
+                    'accuracy': accuracy,
+                    'precision': precision,
+                    'recall': recall,
+                    'f1_score': f1
+                }
+
+                scores_path = getattr(config, f"{model_key.upper()}_SCORES_PATH", None)
+                if scores_path is None:
+                    scores_path = config.PREDICTIONS_DIR / f"{model_key}_scores.json"
+                with open(scores_path, 'w') as f:
+                    json.dump(scores_out, f, indent=4)
+                print(f"[OK] Saved scores: {scores_path}")
+
+                # Accuracy file (visualizer format)
+                # Build confusion matrix in visualizer orientation [[TN, FP],[FN, TP]]
+                confusion_matrix = [[TN, FP], [FN, TP]]
+
+                # classification_report similar to convert_results_for_viz
+                classification_report = {
+                    "0": {
+                        "precision": (TN / (TN + FN)) if (TN + FN) > 0 else 0,
+                        "recall": (TN / (TN + FP)) if (TN + FP) > 0 else 0,
+                        "f1-score": 0,
+                        "support": int(TN + FP)
+                    },
+                    "1": {
+                        "precision": precision,
+                        "recall": recall,
+                        "f1-score": f1,
+                        "support": int(TP + FN)
+                    },
+                    "accuracy": accuracy,
+                    "macro avg": {
+                        "precision": 0,
+                        "recall": 0,
+                        "f1-score": 0,
+                        "support": int(total)
+                    },
+                    "weighted avg": {
+                        "precision": precision,
+                        "recall": recall,
+                        "f1-score": f1,
+                        "support": int(total)
+                    }
+                }
+
+                # Fill class 0 f1 and macro avg
+                if classification_report["0"]["precision"] > 0 and classification_report["0"]["recall"] > 0:
+                    classification_report["0"]["f1-score"] = (
+                        2 * classification_report["0"]["precision"] * classification_report["0"]["recall"] /
+                        (classification_report["0"]["precision"] + classification_report["0"]["recall"])
+                    )
+
+                classification_report["macro avg"]["precision"] = (
+                    classification_report["0"]["precision"] + classification_report["1"]["precision"]
+                ) / 2
+                classification_report["macro avg"]["recall"] = (
+                    classification_report["0"]["recall"] + classification_report["1"]["recall"]
+                ) / 2
+                classification_report["macro avg"]["f1-score"] = (
+                    classification_report["0"]["f1-score"] + classification_report["1"]["f1-score"]
+                ) / 2
+
+                accuracy_out = {
+                    "model_name": model_name,
+                    "test_accuracy": accuracy,
+                    "test_loss": None,
+                    "confusion_matrix": confusion_matrix,
+                    "classification_report": classification_report,
+                    "metrics": {
+                        "TP": TP,
+                        "FN": FN,
+                        "TN": TN,
+                        "FP": FP,
+                        "accuracy": accuracy,
+                        "precision": precision,
+                        "recall": recall,
+                        "f1_score": f1
+                    }
+                }
+
+                acc_path = getattr(config, f"{model_key.upper()}_ACC_PATH", None)
+                if acc_path is None:
+                    acc_path = config.RESULTS_DIR / f"{model_key}_accuracy.json"
+                acc_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(acc_path, 'w') as f:
+                    json.dump(accuracy_out, f, indent=4)
+                print(f"[OK] Saved accuracy: {acc_path}")
+
+                # Write by-category cache so subsequent runs can skip heavy inference
+                by_category_path = config.PREDICTIONS_DIR / f"{model_key}_by_category.json"
+                with open(by_category_path, 'w') as f:
+                    json.dump(results[model_name], f, indent=4)
+                print(f"[OK] Saved per-category cache: {by_category_path}")
+
+        except Exception as e:
+            print(f"[WARNING] Failed to write canonical outputs for {model_name}: {e}")
     
     return results
 
@@ -441,11 +757,22 @@ def generate_performance_table(results, categories):
     if not results:
         return None
     
-    # Sort categories by SNR (worst to best)
-    sorted_cats = sorted(
-        [(cat_name, cat_info) for cat_name, cat_info in categories.items()],
-        key=lambda x: x[1]['snr_db']
-    )
+    # Sort categories in a robust way:
+    # 1) categories with finite snr_db sorted by snr_db (worst/most-negative first)
+    # 2) categories detected from filenames with a distance_m are placed after, sorted by distance (farther first)
+    def _sort_key(item):
+        cat_info = item[1]
+        snr = cat_info.get('snr_db', float('nan'))
+        dist = cat_info.get('distance_m', None)
+        if np.isfinite(snr):
+            return (0, float(snr))
+        elif dist is not None:
+            # place detected distances after configured SNRs, order by distance descending
+            return (1, -int(dist))
+        else:
+            return (2, 0)
+
+    sorted_cats = sorted([(cat_name, cat_info) for cat_name, cat_info in categories.items()], key=_sort_key)
     
     table_data = []
     
@@ -692,7 +1019,7 @@ def plot_difficulty_spectrum(categories, category_files):
     plt.close()
 
 
-def main():
+def main(force_retest=None):
     """Main execution function."""
     print("=" * 80)
     print("REAL PERFORMANCE BY DISTANCE ANALYSIS")
@@ -700,6 +1027,13 @@ def main():
     print("\nTesting trained models on each SNR category...")
     print("This will take several minutes...\n")
     
+    # Determine force_retest: prefer explicit parameter, else parse CLI
+    if force_retest is None:
+        parser = argparse.ArgumentParser(description='Performance by distance analysis')
+        parser.add_argument('--force-retest', action='store_true', help='Force re-running model inference even if cached results exist')
+        args = parser.parse_args()
+        force_retest = args.force_retest
+
     # Load configuration
     print("[STEP 1/5] Loading augmentation configuration...")
     aug_config = load_augmentation_config()
@@ -710,7 +1044,11 @@ def main():
     # Extract categories from config
     print("\n[STEP 2/5] Extracting category definitions...")
     categories = get_categories_from_config(aug_config)
-    print(f"[OK] Found {len(categories)} categories:")
+
+    # Detect additional categories present in dataset files (fallback)
+    categories = detect_categories_from_files(categories)
+
+    print(f"[OK] Found {len(categories)} categories (config + detected):")
     for cat_name, cat_info in categories.items():
         print(f"  - {cat_info['display_name']}: {cat_info.get('description', 'N/A')[:60]}")
     
@@ -727,7 +1065,33 @@ def main():
     
     # Test models
     print(f"\n[STEP 4/5] Testing models by distance category...")
-    results = test_models_by_distance(categories, category_files)
+
+    # Load optional calibrated thresholds (auto-run calibration if enabled and not present)
+    thresholds_path = Path(__file__).parent / 'outputs' / 'model_thresholds.json'
+    thresholds = None
+    if thresholds_path.exists():
+        try:
+            with open(thresholds_path, 'r') as f:
+                thresholds = json.load(f)
+            print(f"[OK] Loaded model thresholds from: {thresholds_path}")
+        except Exception as e:
+            print(f"[WARNING] Failed to load thresholds: {e}")
+            thresholds = None
+    else:
+        if getattr(config, 'AUTO_CALIBRATE_THRESHOLDS', False):
+            print("[INFO] No thresholds file found. Running automatic threshold calibration...")
+            try:
+                # Import and run the calibration script
+                from . import threshold_calibration as tc
+                tc.main()
+                with open(thresholds_path, 'r') as f:
+                    thresholds = json.load(f)
+                print(f"[OK] Calibration complete, loaded thresholds from: {thresholds_path}")
+            except Exception as e:
+                print(f"[WARNING] Auto-calibration failed: {e}")
+                thresholds = None
+
+    results = test_models_by_distance(categories, category_files, force_retest=force_retest, thresholds=thresholds)
     
     if not results:
         print("[ERROR] No results generated")

@@ -86,6 +86,7 @@ ATTENTION_CRNN_PREDICTIONS_PATH = PREDICTIONS_DIR / "attention_crnn_predictions.
 CNN_SCORES_PATH = PREDICTIONS_DIR / "cnn_scores.json"
 RNN_SCORES_PATH = PREDICTIONS_DIR / "rnn_scores.json"
 CRNN_SCORES_PATH = PREDICTIONS_DIR / "crnn_scores.json"
+ATTENTION_CRNN_SCORES_PATH = PREDICTIONS_DIR / "attention_crnn_scores.json"
 
 # Voting results paths
 VOTING_DIR = RESULTS_DIR / "voting"
@@ -127,6 +128,16 @@ SAMPLE_RATE = 22050
 DURATION = 10
 NUM_SEGMENTS = 10
 
+# Mel extraction parameters (central source of truth)
+# Use these values everywhere to ensure consistent features between
+# training, extraction and inference.
+MEL_DURATION = 4.0        # seconds used per example at training/inference
+MEL_N_MELS = 44           # number of mel bins
+MEL_N_FFT = 2048          # FFT window size
+MEL_HOP_LENGTH = 512      # hop length in samples
+MEL_TIME_FRAMES = 90      # number of time frames to pad/truncate to
+MEL_PAD_VALUE = -100.0    # sentinel padding value used in precomputed features
+
 # Model inference configuration
 # Adaptive thresholds for each model (auto-calibrated or manually set)
 MODEL_THRESHOLDS = {
@@ -138,6 +149,10 @@ MODEL_THRESHOLDS = {
 # Auto-calibration settings
 AUTO_CALIBRATE_THRESHOLDS = False  # Set to True to auto-calibrate on first performance calculation
 TARGET_RECALL = 0.95  # Target recall for threshold calibration (prefer false positives over false negatives)
+
+# Enforce usage of precomputed features only. When True, any code path that would
+# compute MELs on-the-fly should instead read `mel_test_index.json` or fail.
+PRECOMPUTED_ONLY = True
 
 # Ensemble voting configuration
 # PHASE 2A: Optimized weights based on distance performance analysis

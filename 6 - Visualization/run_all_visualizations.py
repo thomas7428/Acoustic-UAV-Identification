@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 # Import visualization modules
+import argparse
 import dataset_analysis
 import model_performance
 import augmentation_impact
@@ -25,27 +26,33 @@ def print_header(text):
 
 def main():
     """Run all visualization scripts."""
+    parser = argparse.ArgumentParser(description='Run all visualization steps')
+    parser.add_argument('--force-retest', action='store_true', help='Force re-running distance performance even if cached results exist')
+    args = parser.parse_args()
     print_header("ACOUSTIC UAV IDENTIFICATION - VISUALIZATION SUITE")
     
     print("This script will generate all visualizations and analysis reports.")
     print("Outputs will be saved in: ./outputs/\n")
     
     try:
-        # 1. Dataset Analysis
-        print_header("STEP 1: DATASET ANALYSIS")
+        # 1. Performance by distance (produce canonical artifacts used by other visualizations)
+        print_header("STEP 1: PERFORMANCE BY DISTANCE (GENERATE CANONICAL ARTIFACTS)")
+        performance_by_distance.main(force_retest=args.force_retest)
+
+        # 2. Dataset Analysis
+        print_header("STEP 2: DATASET ANALYSIS")
         dataset_analysis.main()
-        
-        # 2. Model Performance
-        print_header("STEP 2: MODEL PERFORMANCE ANALYSIS")
+
+        # 3. Model Performance
+        print_header("STEP 3: MODEL PERFORMANCE ANALYSIS")
         model_performance.main()
         
         # 3. Augmentation Impact
         print_header("STEP 3: AUGMENTATION IMPACT ANALYSIS")
         augmentation_impact.main()
         
-        # 4. Performance by Distance
-        print_header("STEP 4: PERFORMANCE BY DISTANCE/SNR")
-        performance_by_distance.main()
+        # NOTE: `performance_by_distance` already ran at STEP 1 to produce canonical artifacts.
+        # We avoid running it a second time here to prevent duplicate long computations.
         
         # Final summary
         print_header("VISUALIZATION SUITE COMPLETE")

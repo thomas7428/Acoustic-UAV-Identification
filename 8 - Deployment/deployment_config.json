@@ -1,0 +1,106 @@
+{
+  "version": "1.0",
+  "description": "Raspberry Pi Real-Time Drone Detection Configuration",
+  
+  "audio": {
+    "sample_rate": 22050,
+    "duration_seconds": 4,
+    "channels": 1,
+    "input_directory": "./audio_input",
+    "file_pattern": "*.wav",
+    "delete_after_processing": false
+  },
+  
+  "detection": {
+    "scan_interval_seconds": 5,
+    "confidence_threshold_default": 0.85,
+    "model_thresholds": {
+      "CNN": 0.85,
+      "RNN": 0.95,
+      "CRNN": 0.90,
+      "Attention-CRNN": 0.95
+    },
+    "enabled_models": ["CNN", "Attention-CRNN"],
+    "voting_strategy": "majority",
+    "min_consecutive_detections": 2,
+    "description": "Models vote: if majority says DRONE above threshold, trigger alert"
+  },
+  
+  "models": {
+    "directory": "./models",
+    "available_models": {
+      "CNN": {
+        "filename": "cnn_model.keras",
+        "architecture": "CNN",
+        "description": "Fast, good baseline performance",
+        "threshold": 0.85
+      },
+      "RNN": {
+        "filename": "rnn_model.keras",
+        "architecture": "RNN",
+        "description": "Temporal patterns, needs high threshold",
+        "threshold": 0.95
+      },
+      "CRNN": {
+        "filename": "crnn_model.keras",
+        "architecture": "CRNN",
+        "description": "Balanced performance",
+        "threshold": 0.90
+      },
+      "Attention-CRNN": {
+        "filename": "attention_crnn_model.keras",
+        "architecture": "Attention-CRNN",
+        "description": "Best overall, focuses on key features",
+        "threshold": 0.95
+      }
+    }
+  },
+  
+  "feature_extraction": {
+    "mel_spectrogram": {
+      "n_mels": 44,
+      "n_fft": 2048,
+      "hop_length": 512,
+      "fmin": 20,
+      "fmax": 11025
+    },
+    "normalization": true,
+    "preprocessing": "standard"
+  },
+  
+  "output": {
+    "log_directory": "./logs",
+    "log_level": "INFO",
+    "save_predictions": true,
+    "predictions_file": "./logs/predictions.json",
+    "alert_sound": false,
+    "console_output": true,
+    "timestamp_format": "%Y-%m-%d %H:%M:%S"
+  },
+  
+  "alerts": {
+    "enabled": true,
+    "methods": ["console", "log"],
+    "drone_detected_message": "🚨 DRONE DETECTED",
+    "no_drone_message": "✓ No drone detected",
+    "include_confidence": true,
+    "include_model_breakdown": true
+  },
+  
+  "performance": {
+    "use_gpu": false,
+    "batch_size": 1,
+    "num_threads": 2,
+    "memory_limit_mb": 512,
+    "optimize_for_raspberry_pi": true
+  },
+  
+  "recording": {
+    "enabled": false,
+    "device_index": 0,
+    "auto_record": false,
+    "save_recordings": false,
+    "recordings_directory": "./recordings",
+    "description": "Set enabled=true to record from microphone instead of file monitoring"
+  }
+}

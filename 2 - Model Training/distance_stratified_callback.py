@@ -47,11 +47,27 @@ class DistanceStratifiedCallback(keras.callbacks.Callback):
     def _load_validation_data_by_distance(self):
         """Load and organize validation samples by distance."""
         import librosa
+        import re
         
         print(f"\n[DistanceStratified] Loading validation data by distance...")
         
+        # Auto-detect available distances from filenames
+        print("[DistanceStratified] Auto-detecting distance categories from filenames...")
+        drone_dir = self.validation_dir / "1"
+        detected_distances = set()
+        
+        if drone_dir.exists():
+            for wav_file in drone_dir.glob("*.wav"):
+                # Extract distance from filename (e.g., "drone_600m_" or "aug_drone_700m_")
+                match = re.search(r'drone_(\d+m)', wav_file.name)
+                if match:
+                    detected_distances.add(match.group(1))
+        
+        # Sort distances numerically (100m, 200m, 350m, 500m, 600m, 700m, etc.)
+        distances = sorted(detected_distances, key=lambda x: int(x[:-1]))
+        print(f"[DistanceStratified] Detected distances: {distances}")
+        
         # Initialize distance buckets
-        distances = ['500m', '350m', '200m', '100m', '50m']
         for dist in distances:
             self.distance_data[dist] = {
                 'features': [],
@@ -67,19 +83,17 @@ class DistanceStratifiedCallback(keras.callbacks.Callback):
         }
         
         # Load drone samples (label 1)
-        drone_dir = self.validation_dir / "1"
         if drone_dir.exists():
             for wav_file in drone_dir.glob("*.wav"):
                 filename = wav_file.name
                 
                 # Extract distance from filename
                 distance = None
-                for dist in distances:
-                    if f"drone_{dist}" in filename:
-                        distance = dist
-                        break
+                match = re.search(r'drone_(\d+m)', filename)
+                if match:
+                    distance = match.group(1)
                 
-                if distance:
+                if distance and distance in distances:
                     # Load audio and extract MEL spectrogram
                     try:
                         audio, sr = librosa.load(wav_file, sr=22050)
@@ -160,8 +174,12 @@ class DistanceStratifiedCallback(keras.callbacks.Callback):
         print(f"  Distance-Stratified Validation - Epoch {epoch + 1}")
         print(f"{'='*70}")
         
-        # Evaluate each distance separately
-        distances = ['500m', '350m', '200m', '100m', '50m']
+        # Evaluate each distance separately (auto-detected during loading)
+        # Get all drone distances (exclude 'ambient')
+        distances = [k for k in self.distance_data.keys() if k != 'ambient']
+        # Sort numerically
+        distances = sorted(distances, key=lambda x: int(x[:-1]))
+        
         for dist in distances:
             if dist in self.distance_data and len(self.distance_data[dist]['features']) > 0:
                 X = self.distance_data[dist]['features']
@@ -239,8 +257,10 @@ class DistanceStratifiedCallback(keras.callbacks.Callback):
         print(f"  Distance-Stratified Training Summary - {self.model_name.upper()}")
         print(f"{'='*70}")
         
-        # Find best epoch for each distance
-        distances = ['500m', '350m', '200m', '100m', '50m']
+        # Find best epoch for each distance (auto-detected)
+        distances = [k for k in self.distance_data.keys() if k != 'ambient']
+        distances = sorted(distances, key=lambda x: int(x[:-1]))
+        
         for dist in distances:
             best_epoch = None
             best_acc = 0

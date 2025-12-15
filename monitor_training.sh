@@ -80,7 +80,7 @@ get_training_progress() {
 
 # Function to check if training is active
 is_training_active() {
-    ps aux | grep -E "(CNN|RNN|CRNN|Attention_CRNN)_Trainer.py" | grep -v grep > /dev/null
+    ps aux | grep -E "(CNN|RNN|CRNN|Attention_CRNN|MultiTask_CNN)_Trainer.py" | grep -v grep > /dev/null
     return $?
 }
 
@@ -204,7 +204,7 @@ while true; do
     # Show active processes
     if is_training_active; then
         echo -e "${YELLOW}Active Trainers:${NC}"
-        ps aux | grep -E "(CNN|RNN|CRNN|MultiTask_CNN)_Trainer.py" | grep -v grep | awk '{print "  • " $11}' | sed 's|.*/||'
+        ps aux | grep -E "(CNN|RNN|CRNN|Attention_CRNN|MultiTask_CNN)_Trainer.py" | grep -v grep | awk '{print "  • " $11}' | sed 's|.*/||'
         echo ""
     fi
     

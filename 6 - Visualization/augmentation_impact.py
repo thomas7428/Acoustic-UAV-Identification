@@ -122,18 +122,15 @@ def plot_augmentation_composition():
     # Extract data
     categories = list(all_stats.keys())
     counts = [all_stats[cat]['generated'] for cat in categories]
-    colors_map = {
-        'drone_very_far': '#e74c3c',
-        'drone_far': '#e67e22',
-        'drone_medium': '#f39c12',
-        'drone_close': '#2ecc71',
-        'drone_very_close': '#27ae60',
-        'ambient_complex': '#3498db',
-        'ambient_moderate': '#5dade2',
-        'ambient_simple': '#85c1e9',
-        'ambient_quiet': '#aed6f1'
-    }
-    colors = [colors_map.get(cat, 'gray') for cat in categories]
+    # Use a seaborn qualitative palette to ensure distinct, colourblind-friendly colors
+    try:
+        palette = sns.color_palette('tab10', n_colors=len(categories))
+    except Exception:
+        palette = sns.color_palette('muted', n_colors=len(categories))
+
+    # Map palette entries to categories in the observed order so colors are stable but
+    # visually distinct (matplotlib accepts RGB tuples from seaborn)
+    colors = [palette[i % len(palette)] for i in range(len(categories))]
     
     # Create figure with pie and bar charts
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))

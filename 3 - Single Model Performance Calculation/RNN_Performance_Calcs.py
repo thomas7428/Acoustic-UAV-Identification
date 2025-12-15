@@ -16,7 +16,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import config
 
 # Read and save parameters.
-DATASET_PATH = config.DATASET_ROOT_STR  # Path of folder with testing audios
+# Force dataset_test for performance evaluation (not dataset_combined!)
+DATASET_PATH = str(config.PROJECT_ROOT / "0 - DADS dataset extraction" / "dataset_test")
 SAVED_MODEL_PATH = config.RNN_MODEL_PATH_STR  # Path of trained model
 SAMPLE_RATE = 22050  # Sample rate in Hz.
 DURATION = 10  # Length of audio files fed. Measured in seconds. MUST MATCH TRAINING!

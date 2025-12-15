@@ -18,6 +18,7 @@ import seaborn as sns
 from pathlib import Path
 import pandas as pd
 from sklearn.metrics import confusion_matrix, classification_report, roc_curve, auc
+import importlib.util
 
 # Import project config
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -29,29 +30,82 @@ plt.rcParams['figure.figsize'] = (12, 8)
 plt.rcParams['font.size'] = 10
 
 
+def _load_converter_module():
+    """Dynamically load the converter script from folder '3 - Single Model Performance Calculation'.
+    Returns the module object or None if not found/failed.
+    """
+    conv_path = Path(__file__).parent.parent / "3 - Single Model Performance Calculation" / "convert_results_for_viz.py"
+    if not conv_path.exists():
+        return None
+    try:
+        spec = importlib.util.spec_from_file_location("convert_results_for_viz", str(conv_path))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    except Exception as e:
+        print(f"[WARN] Failed to load converter module: {e}")
+        return None
+
+
 def load_training_history(model_name):
-    """Load training history from CSV file."""
-    history_path = config.RESULTS_DIR / f"{model_name.lower()}_history.csv"
-    
+    """Load training history from CSV file using centralized paths in `config`."""
+    mapping = {
+        'CNN': config.CNN_HISTORY_PATH,
+        'RNN': config.RNN_HISTORY_PATH,
+        'CRNN': config.CRNN_HISTORY_PATH,
+        'Attention-CRNN': config.ATTENTION_CRNN_HISTORY_PATH,
+    }
+
+    history_path = Path(mapping.get(model_name))
+
     if not history_path.exists():
         print(f"[WARNING] History not found: {history_path}")
         return None
-    
+
     df = pd.read_csv(history_path)
     return df
 
 
 def load_accuracy_data(model_name):
-    """Load accuracy metrics from JSON file."""
-    acc_path = config.RESULTS_DIR / f"{model_name.lower()}_accuracy.json"
-    
+    """Load accuracy metrics from JSON file using centralized paths in `config`."""
+    mapping = {
+        'CNN': config.CNN_ACC_PATH,
+        'RNN': config.RNN_ACC_PATH,
+        'CRNN': config.CRNN_ACC_PATH,
+        'Attention-CRNN': config.ATTENTION_CRNN_ACC_PATH,
+    }
+
+    acc_path = Path(mapping.get(model_name))
+
     if not acc_path.exists():
+        # Try to auto-convert from scores JSON if available (backwards compatibility)
         print(f"[WARNING] Accuracy file not found: {acc_path}")
-        return None
-    
+        scores_map = {
+            'CNN': config.CNN_SCORES_PATH,
+            'RNN': config.RNN_SCORES_PATH,
+            'CRNN': config.CRNN_SCORES_PATH,
+            'Attention-CRNN': config.ATTENTION_CRNN_SCORES_PATH,
+        }
+        scores_path = Path(scores_map.get(model_name))
+        if scores_path.exists():
+            conv = _load_converter_module()
+            if conv and hasattr(conv, 'convert_scores_to_accuracy_format'):
+                try:
+                    print(f"[INFO] Converting scores -> accuracy JSON for {model_name} using {scores_path}")
+                    conv.convert_scores_to_accuracy_format(scores_path, acc_path, model_name)
+                    if acc_path.exists():
+                        print(f"[OK] Generated accuracy file: {acc_path}")
+                except Exception as e:
+                    print(f"[ERROR] Conversion failed for {model_name}: {e}")
+            else:
+                print(f"[WARN] Converter not available; cannot auto-generate {acc_path}")
+        else:
+            # No scores available either
+            return None
+
     with open(acc_path, 'r') as f:
         data = json.load(f)
-    
+
     return data
 
 

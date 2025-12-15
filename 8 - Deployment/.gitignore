@@ -1,0 +1,39 @@
+# Model files (large, don't commit)
+models/*.keras
+models/*.h5
+models/*.tflite
+
+# Audio files
+audio_input/*.wav
+audio_input/*.mp3
+recordings/*.wav
+
+# Logs
+logs/*.log
+logs/*.json
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temporary files
+*.tmp
+*.temp
+*~

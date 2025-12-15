@@ -48,13 +48,16 @@ def load_data(data_path):
         for label in [0, 1]:
             class_dir = base_dir / str(label)
             for wav_file in sorted(class_dir.glob("*.wav")):
-                audio, sr = librosa.load(wav_file, sr=22050, duration=4.0)
-                mel = librosa.feature.melspectrogram(y=audio, sr=sr, n_mels=44, n_fft=2048, hop_length=512)
+                audio, sr = librosa.load(wav_file, sr=config.SAMPLE_RATE, duration=config.MEL_DURATION)
+                mel = librosa.feature.melspectrogram(y=audio, sr=sr,
+                                                     n_mels=config.MEL_N_MELS,
+                                                     n_fft=config.MEL_N_FFT,
+                                                     hop_length=config.MEL_HOP_LENGTH)
                 mel_db = librosa.power_to_db(mel, ref=np.max)
-                if mel_db.shape[1] < 90:
-                    mel_db = np.pad(mel_db, ((0, 0), (0, 90 - mel_db.shape[1])), mode='constant')
+                if mel_db.shape[1] < config.MEL_TIME_FRAMES:
+                    mel_db = np.pad(mel_db, ((0, 0), (0, config.MEL_TIME_FRAMES - mel_db.shape[1])), mode='constant', constant_values=(config.MEL_PAD_VALUE,))
                 else:
-                    mel_db = mel_db[:, :90]
+                    mel_db = mel_db[:, :config.MEL_TIME_FRAMES]
                 X.append(mel_db)
                 y.append(label)
         return np.array(X), np.array(y)
