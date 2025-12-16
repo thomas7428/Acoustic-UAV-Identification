@@ -42,6 +42,36 @@
     },
     "categories": [
       {
+        "name": "drone_1000m",
+        "snr_db": -45,
+        "proportion": 0.05,
+        "num_background_noises": 7,
+        "description": "Extreme theoretical distance - very heavy distortions",
+        "augmentation_params": {
+          "ambient_intensity": 0.98,
+          "pitch_shift_semitones": [-2, -1, 0, 1, 2],
+          "time_stretch_factor": [0.90, 0.95, 1.0, 1.05, 1.10],
+          "apply_spectral_filter": true,
+          "noise_injection": 0.15
+        },
+        "label": 1
+      },
+      {
+        "name": "drone_850m",
+        "snr_db": -42,
+        "proportion": 0.04,
+        "num_background_noises": 6,
+        "description": "Very far distance - strong distortions",
+        "augmentation_params": {
+          "ambient_intensity": 0.96,
+          "pitch_shift_semitones": [-2, -1, 0, 1, 2],
+          "time_stretch_factor": [0.90, 0.95, 1.0, 1.05],
+          "apply_spectral_filter": true,
+          "noise_injection": 0.13
+        },
+        "label": 1
+      },
+      {
         "name": "drone_700m",
         "snr_db": -38,
         "proportion": 0.08,
@@ -74,7 +104,7 @@
       {
         "name": "drone_500m",
         "snr_db": -32,
-        "proportion": 0.50,
+        "proportion": 0.46,
         "num_background_noises": 5,
         "description": "Long distance + light distortions - dominant category",
         "augmentation_params": {
@@ -89,7 +119,7 @@
       {
         "name": "drone_350m",
         "snr_db": -27,
-        "proportion": 0.18,
+        "proportion": 0.16,
         "num_background_noises": 5,
         "description": "Medium distance + minimal distortions",
         "augmentation_params": {
@@ -128,21 +158,6 @@
           "time_stretch_factor": [1.0],
           "apply_spectral_filter": false,
           "noise_injection": 0.02
-        },
-        "label": 1
-      },
-      {
-        "name": "drone_original",
-        "snr_db": 999,
-        "proportion": 0.03,
-        "num_background_noises": 0,
-        "description": "Clean original samples - small baseline",
-        "augmentation_params": {
-          "ambient_intensity": 0.0,
-          "pitch_shift_semitones": [0],
-          "time_stretch_factor": [1.0],
-          "apply_spectral_filter": false,
-          "noise_injection": 0.0
         },
         "label": 1
       }
@@ -253,7 +268,7 @@
   
   "audio_parameters": {
     "sample_rate": 22050,
-    "target_duration_sec": 10,
+    "target_duration_sec": 4,
     "enable_looping": true,
     "crossfade_duration_sec": 0.1,
     "enable_normalization": true,
@@ -262,8 +277,8 @@
   
   "output": {
     "output_dir": "dataset_augmented",
-    "samples_per_category_drone": 2000,
-    "samples_per_category_no_drone": 2000,
+    "samples_per_category_drone": 3000,
+    "samples_per_category_no_drone": 3000,
     "save_mixing_info": true,
     "info_filename": "augmentation_metadata.json"
   },

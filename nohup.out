@@ -1,0 +1,24 @@
+Re-launching script under nohup; log -> /home/bazzite/Acoustic-UAV-Identification/logs/pipeline_20251215_114251.log
+Started background process with PID 2896996 (log: /home/bazzite/Acoustic-UAV-Identification/logs/pipeline_20251215_114251.log)
+Re-launching script under nohup; log -> /home/bazzite/Acoustic-UAV-Identification/logs/pipeline_20251215_115304.log
+Started background process with PID 2903975 (log: /home/bazzite/Acoustic-UAV-Identification/logs/pipeline_20251215_115304.log)
+Re-launching script under nohup; log -> /home/bazzite/Acoustic-UAV-Identification/logs/pipeline_20251215_121853.log
+Started background process with PID 495 (log: /home/bazzite/Acoustic-UAV-Identification/logs/pipeline_20251215_121853.log)
+/home/bazzite/Acoustic-UAV-Identification/6 - Visualization/run_all_visualizations.py: ligne 7: $'\nComplete Visualization Runner\nGenerates all visualizations and creates a comprehensive analysis report.\n\nUsage:\n    python run_all_visualizations.py\n': commande introuvable
+/home/bazzite/Acoustic-UAV-Identification/6 - Visualization/run_all_visualizations.py: ligne 9: import: commande introuvable
+/home/bazzite/Acoustic-UAV-Identification/6 - Visualization/run_all_visualizations.py: ligne 10: from: commande introuvable
+/home/bazzite/Acoustic-UAV-Identification/6 - Visualization/run_all_visualizations.py: ligne 13: import: commande introuvable
+/home/bazzite/Acoustic-UAV-Identification/6 - Visualization/run_all_visualizations.py: ligne 14: import: commande introuvable
+/home/bazzite/Acoustic-UAV-Identification/6 - Visualization/run_all_visualizations.py: ligne 15: import: commande introuvable
+/home/bazzite/Acoustic-UAV-Identification/6 - Visualization/run_all_visualizations.py: ligne 16: import: commande introuvable
+/home/bazzite/Acoustic-UAV-Identification/6 - Visualization/run_all_visualizations.py: ligne 17: import: commande introuvable
+/home/bazzite/Acoustic-UAV-Identification/6 - Visualization/run_all_visualizations.py: ligne 20: erreur de syntaxe près du symbole inattendu « ( »
+/home/bazzite/Acoustic-UAV-Identification/6 - Visualization/run_all_visualizations.py: ligne 20: `def print_header(text):'
+Re-launching script under nohup; log -> /home/bazzite/Acoustic-UAV-Identification/logs/pipeline_20251215_164612.log
+Started background process with PID 3399707 (log: /home/bazzite/Acoustic-UAV-Identification/logs/pipeline_20251215_164612.log)
+Re-launching script under nohup; log -> /home/bazzite/Acoustic-UAV-Identification/logs/pipeline_20251215_165052.log
+Started background process with PID 3414039 (log: /home/bazzite/Acoustic-UAV-Identification/logs/pipeline_20251215_165052.log)
+Re-launching script under nohup; log -> /home/bazzite/Acoustic-UAV-Identification/logs/pipeline_20251215_181125.log
+Started background process with PID 4028251 (log: /home/bazzite/Acoustic-UAV-Identification/logs/pipeline_20251215_181125.log)
+Re-launching script under nohup; log -> /home/bazzite/Acoustic-UAV-Identification/logs/pipeline_20251215_185321.log
+Started background process with PID 6662 (log: /home/bazzite/Acoustic-UAV-Identification/logs/pipeline_20251215_185321.log)

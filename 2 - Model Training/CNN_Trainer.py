@@ -40,7 +40,7 @@ def load_data(data_path):
     import librosa
     from pathlib import Path
     
-    print("Loading from stratified directories (45% @ 500m)...")
+    print("Loading from stratified directories ...")
     train_dir = Path("../0 - DADS dataset extraction/dataset_train")
     val_dir = Path("../0 - DADS dataset extraction/dataset_val")
     
@@ -187,10 +187,6 @@ if __name__ == "__main__":
         print("[INFO] Using RECALL-FOCUSED LOSS (FN penalty=50x)")
     else:
         loss_fn = 'sparse_categorical_crossentropy'
-    
-    # Override with recall_focused for Phase 2F
-    loss_fn = get_loss_function('recall_focused', fn_penalty=50.0)
-    print("[PHASE 2F] FORCING RECALL-FOCUSED LOSS (FN penalty=50x)")
     
     # Compile the network with improved loss and metrics
     optimizer = keras.optimizers.Adam(learning_rate=0.0001)

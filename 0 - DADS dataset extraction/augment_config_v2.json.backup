@@ -14,6 +14,22 @@
         "description": "Drone à 500m - totalement inaudible, signal complètement noyé (PHASE 2A: augmenté)"
       },
       {
+        "name": "drone_850m",
+        "proportion": 0.00,
+        "snr_db": -42,
+        "num_background_noises": 6,
+        "label": 1,
+        "description": "(Added placeholder) Very far distance - strong distortions"
+      },
+      {
+        "name": "drone_1000m",
+        "proportion": 0.00,
+        "snr_db": -45,
+        "num_background_noises": 7,
+        "label": 1,
+        "description": "(Added placeholder) Extreme theoretical distance - very heavy distortions"
+      },
+      {
         "name": "drone_350m",
         "proportion": 0.30,
         "snr_db": -27,
@@ -111,8 +127,8 @@
   
   "output": {
     "output_dir": "dataset_augmented",
-    "samples_per_category_drone": 2000,
-    "samples_per_category_no_drone": 2000,
+    "samples_per_category_drone": 3000,
+    "samples_per_category_no_drone": 3000,
     "save_mixing_info": true,
     "info_filename": "augmentation_metadata.json"
   },

@@ -45,7 +45,7 @@ CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # Default settings
-CONFIG_FILE="0 - DADS dataset extraction/augment_config_v2.json"
+CONFIG_FILE="0 - DADS dataset extraction/augment_config_v3.json"
 SKIP_DATASET=false
 SKIP_FEATURES=false
 PARALLEL=false
@@ -105,8 +105,22 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Create log directory
+# Create log directory (and relaunch under nohup so the process survives SSH disconnects)
 mkdir -p "$LOG_DIR"
+
+# PID file for background runs
+PID_FILE="$PROJECT_DIR/run_pipeline.pid"
+
+# If not already launched under nohup, relaunch this script with nohup and exit the parent.
+# This ensures the process keeps running if the SSH session is closed.
+if [ -z "${NOHUP_LAUNCHED:-}" ]; then
+    echo "Re-launching script under nohup; log -> $LOG_FILE"
+    # Export a marker for the child and run under nohup, redirecting stdout/stderr to the chosen log file
+    NOHUP_LAUNCHED=1 nohup "$0" "$@" > "$LOG_FILE" 2>&1 &
+    echo $! > "$PID_FILE"
+    echo "Started background process with PID $(cat $PID_FILE) (log: $LOG_FILE)"
+    exit 0
+fi
 
 # Logging function (must be defined BEFORE first use)
 log() {
@@ -249,6 +263,14 @@ run_feature_extraction() {
         log SUCCESS "MFCC feature extraction completed"
     else
         log ERROR "MFCC feature extraction failed"
+        exit 1
+    fi
+
+    log INFO "Extracting MEL test index from WAVs..."
+    if "$VENV_PATH" regenerate_mel_test_index_from_wavs.py 2>&1 | tee -a "$LOG_FILE"; then
+        log SUCCESS "MEL test index extraction completed"
+    else
+        log ERROR "MEL test index extraction failed"
         exit 1
     fi
     
@@ -413,18 +435,6 @@ run_performance_calculations() {
     else
         log WARN "Result conversion had warnings"
     fi
-    
-    # Calibrate thresholds after performance calculation
-    cd "$PROJECT_DIR"
-    log INFO "Calibrating optimal thresholds..."
-    if "$VENV_PATH" calibrate_thresholds.py --target-recall 0.85 --save 2>&1 | tee -a "$LOG_FILE"; then
-        log SUCCESS "Thresholds calibrated and saved"
-    else
-        log WARN "Threshold calibration had warnings (will use defaults)"
-    fi
-    
-    cd "$PROJECT_DIR"
-    log INFO ""
 }
 
 # Step 4: Threshold Calibration (NEW - Always run unless skipped)
@@ -434,7 +444,7 @@ run_threshold_calibration() {
     cd "$PROJECT_DIR/6 - Visualization"
     
     log INFO "Calibrating optimal classification thresholds..."
-    if "$VENV_PATH" calibrate_thresholds.py 2>&1 | tee -a "$LOG_FILE"; then
+    if "$VENV_PATH" calibrate_thresholds.py --target-recall 0.85 --save 2>&1 | tee -a "$LOG_FILE"; then
         log SUCCESS "Threshold calibration completed"
         
         # Display results if CSV exists

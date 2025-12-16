@@ -57,11 +57,11 @@ DURATION = 10
 SAMPLES_PER_TRACK = SAMPLE_RATE * DURATION
 
 # Paths
-AUGMENT_CONFIG_PATH = Path(__file__).parent.parent / "0 - DADS dataset extraction" / "augment_config_v2.json"
-DATASET_COMBINED_PATH = Path(__file__).parent.parent / "0 - DADS dataset extraction" / "dataset_combined"
-FEATURES_JSON_PATH = Path(__file__).parent.parent / "0 - DADS dataset extraction" / "extracted_features" / "mel_pitch_shift_9.0.json"
+AUGMENT_CONFIG_PATH = config.CONFIG_DATASET_PATH #Path(__file__).parent.parent / "0 - DADS dataset extraction" / "augment_config_v3.json"
+DATASET_COMBINED_PATH = config.DATASET_ROOT
+FEATURES_JSON_PATH = config.MEL_DATA_PATH  # Using MEL features for this analysis
 OUTPUT_DIR = Path(__file__).parent / "outputs"
-TEST_INDEX_PATH = Path(__file__).parent.parent / "0 - DADS dataset extraction" / "extracted_features" / "mel_test_index.json"
+TEST_INDEX_PATH = config.EXTRACTED_FEATURES_DIR / "mel_test_index.json"
 
 
 def load_augmentation_config():
@@ -1033,7 +1033,7 @@ def main(force_retest=None):
         parser.add_argument('--force-retest', action='store_true', help='Force re-running model inference even if cached results exist')
         args = parser.parse_args()
         force_retest = args.force_retest
-
+    
     # Load configuration
     print("[STEP 1/5] Loading augmentation configuration...")
     aug_config = load_augmentation_config()

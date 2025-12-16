@@ -17,6 +17,9 @@ DEFAULT_DATASET = "dataset_combined"  # Use combined dataset by default
 DATASET_NAME = os.environ.get("DATASET_ROOT_OVERRIDE", DEFAULT_DATASET)
 DATASET_ROOT = PROJECT_ROOT / "0 - DADS dataset extraction" / DATASET_NAME
 
+# Config of datasets used for training and validation
+CONFIG_DATASET_PATH = PROJECT_ROOT / "0 - DADS dataset extraction" / "augment_config_v3.json"
+
 # Feature extraction paths
 EXTRACTED_FEATURES_DIR = PROJECT_ROOT / "0 - DADS dataset extraction" / "extracted_features"
 MEL_DATA_PATH = EXTRACTED_FEATURES_DIR / "mel_data.json"
@@ -125,13 +128,24 @@ SCORES_PATHS = {
 
 # Audio parameters
 SAMPLE_RATE = 22050
-DURATION = 10
+"""
+Desired audio duration (seconds) used across the pipeline. Set this to
+the target temporal length for all generated/processed WAV files.
+Example: 4.0 -> all files should be normalized to 4 seconds.
+"""
+
+# Add a single source-of-truth duration constant and keep backwards
+# compatible integer `DURATION` used by some scripts.
+AUDIO_DURATION_S = 4.0
+
+# Backwards-compatible `DURATION` (integer seconds)
+DURATION = int(AUDIO_DURATION_S)
 NUM_SEGMENTS = 10
 
 # Mel extraction parameters (central source of truth)
 # Use these values everywhere to ensure consistent features between
 # training, extraction and inference.
-MEL_DURATION = 4.0        # seconds used per example at training/inference
+MEL_DURATION = float(AUDIO_DURATION_S)        # seconds used per example at training/inference
 MEL_N_MELS = 44           # number of mel bins
 MEL_N_FFT = 2048          # FFT window size
 MEL_HOP_LENGTH = 512      # hop length in samples

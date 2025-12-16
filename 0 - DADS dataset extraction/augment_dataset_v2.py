@@ -700,10 +700,17 @@ def generate_augmented_samples(config, base_dir, dry_run=False):
     no_drone_dir = base_path / config['source_datasets']['no_drone_dir']
     output_dir = base_path / config['output']['output_dir']
     
-    # Get audio parameters
-    sr = config['audio_parameters']['sample_rate']
-    duration = config['audio_parameters']['target_duration_sec']
-    crossfade_duration = config['audio_parameters']['crossfade_duration_sec']
+    # Get audio parameters (allow fallback to centralized config.AUDIO_DURATION_S)
+    audio_params = config.get('audio_parameters', {})
+    sr = audio_params.get('sample_rate', 22050)
+    duration = audio_params.get('target_duration_sec', None)
+    crossfade_duration = audio_params.get('crossfade_duration_sec', 0.1)
+    if duration is None:
+        try:
+            import config as _cfg
+            duration = float(getattr(_cfg, 'AUDIO_DURATION_S', 10.0))
+        except Exception:
+            duration = 10.0
     
     # Set random seed for reproducibility
     random.seed(config['advanced']['random_seed'])

@@ -56,9 +56,20 @@ except ImportError:
     DATASET_PATH = "..."  # Path of folder with training audios.
     JSON_PATH = ".../mel_data.json"  # Location and file name to save feature extracted data.
 
+# Default audio params (may be overridden by centralized `config.py` below)
 SAMPLE_RATE = 22050  # Sample rate in Hz.
-DURATION = 10  # Length of audio files fed. Measured in seconds.
-SAMPLES_PER_TRACK = SAMPLE_RATE * DURATION
+DURATION = 10.0  # Length of audio files fed. Measured in seconds.
+
+# If `config.py` is available, use centralized constants so the
+# preprocessing matches augmentation and training targets.
+try:
+    import config as _cfg
+    SAMPLE_RATE = getattr(_cfg, 'SAMPLE_RATE', SAMPLE_RATE)
+    DURATION = float(getattr(_cfg, 'AUDIO_DURATION_S', DURATION))
+except Exception:
+    pass
+
+SAMPLES_PER_TRACK = int(SAMPLE_RATE * DURATION)
 
 
 def save_mfcc(dataset_path, json_path, n_mels=90, n_fft=2048, hop_length=512, num_segments=5):

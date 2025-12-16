@@ -18,8 +18,8 @@ import config
 # Read and save parameters.
 DATASET_PATH = config.DATASET_ROOT_STR  # Path of folder with testing audios
 SAVED_MODEL_PATH = config.CRNN_MODEL_PATH_STR  # Path of trained model
-SAMPLE_RATE = 22050  # Sample rate in Hz.
-DURATION = 10  # Length of audio files fed. Measured in seconds. MUST MATCH TRAINING!
+SAMPLE_RATE = config.SAMPLE_RATE  # Sample rate in Hz.
+DURATION = config.DURATION  # Length of audio files fed. Measured in seconds. MUST MATCH TRAINING!
 SAMPLES_PER_TRACK = SAMPLE_RATE * DURATION
 
 # Predictions (1 or 0)
@@ -60,7 +60,7 @@ class _Class_Predict_Service:
         return predicted_class
 
     # Outputs certainty values for soft voting (1-0).
-    def preprocess(self, file_path, n_mels=90, n_fft=2048, hop_length=512, num_segments=10):
+    def preprocess(self, file_path, n_mels=config.MEL_N_MELS, n_fft=config.MEL_N_FFT, hop_length=config.MEL_HOP_LENGTH, num_segments=config.NUM_SEGMENTS):
         """Extract MFCCs from audio file.
         :param file_path (str): Path of audio file
         :param n_mels (int): # of mels to extract

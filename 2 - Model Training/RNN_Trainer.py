@@ -152,10 +152,6 @@ if __name__ == "__main__":
     else:
         loss_fn = 'sparse_categorical_crossentropy'
     
-    # Override with recall_focused for Phase 2F
-    loss_fn = get_loss_function('recall_focused', fn_penalty=50.0)
-    print("[PHASE 2F] FORCING RECALL-FOCUSED LOSS (FN penalty=50x)")
-    
     # Compile the network with improved loss and metrics
     optimiser = keras.optimizers.Adam(learning_rate=0.0005)
     model.compile(optimizer=optimiser,

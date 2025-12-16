@@ -118,25 +118,24 @@ class DistanceStratifiedCallback(keras.callbacks.Callback):
         # Load ambient samples (label 0)
         ambient_dir = self.validation_dir / "0"
         if ambient_dir.exists():
-            for wav_file in list(ambient_dir.glob("*.wav"))[:100]:  # Limit to 100 for speed
-                try:
-                    audio, sr = librosa.load(wav_file, sr=22050)
-                    mel = librosa.feature.melspectrogram(
-                        y=audio, sr=sr, n_mels=44, n_fft=2048, hop_length=512
-                    )
-                    mel_db = librosa.power_to_db(mel, ref=np.max)
-                    
-                    if mel_db.shape[1] < 90:
-                        mel_db = np.pad(mel_db, ((0, 0), (0, 90 - mel_db.shape[1])), mode='constant')
-                    else:
-                        mel_db = mel_db[:, :90]
-                    
-                    self.distance_data['ambient']['features'].append(mel_db)
-                    self.distance_data['ambient']['labels'].append(0)
-                    self.distance_data['ambient']['filenames'].append(wav_file.name)
-                    
-                except Exception as e:
-                    print(f"Error loading {wav_file.name}: {e}")
+            try:
+                audio, sr = librosa.load(wav_file, sr=22050)
+                mel = librosa.feature.melspectrogram(
+                    y=audio, sr=sr, n_mels=44, n_fft=2048, hop_length=512
+                )
+                mel_db = librosa.power_to_db(mel, ref=np.max)
+                
+                if mel_db.shape[1] < 90:
+                    mel_db = np.pad(mel_db, ((0, 0), (0, 90 - mel_db.shape[1])), mode='constant')
+                else:
+                    mel_db = mel_db[:, :90]
+                
+                self.distance_data['ambient']['features'].append(mel_db)
+                self.distance_data['ambient']['labels'].append(0)
+                self.distance_data['ambient']['filenames'].append(wav_file.name)
+                
+            except Exception as e:
+                print(f"Error loading {wav_file.name}: {e}")
         
         # Convert to numpy arrays
         for key in self.distance_data:
