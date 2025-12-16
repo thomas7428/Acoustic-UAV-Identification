@@ -20,7 +20,13 @@ from loss_functions import get_loss_function, get_metrics
 startTime = datetime.now()
 
 # Path to created json file from mel preprocess and feature extraction script.
-DATA_PATH = config.MEL_TRAIN_PATH_STR
+# DATA_PATH = config.MEL_TRAIN_PATH_STR
+TRAIN_DATA_PATH = config.MEL_TRAIN_DATA_PATH_STR
+TRAIN_INDEX_PATH = config.MEL_TRAIN_INDEX_PATH_STR
+VAL_DATA_PATH = config.MEL_VAL_DATA_PATH_STR
+VAL_INDEX_PATH = config.MEL_VAL_INDEX_PATH_STR
+
+
 
 # Path to save model.
 MODEL_SAVE = config.CNN_MODEL_PATH_STR
@@ -29,8 +35,12 @@ MODEL_SAVE = config.CNN_MODEL_PATH_STR
 HISTORY_SAVE = config.CNN_HISTORY_PATH_STR
 ACC_SAVE = config.CNN_ACC_PATH_STR
 
+# Training hyperparams (use config when available)
+BATCH_SIZE = getattr(config, 'BATCH_SIZE', 16)
+LEARNING_RATE = getattr(config, 'LEARNING_RATE', 0.0001)
 
-def load_data(data_path):
+
+def load_data():
     """Loads training dataset from json file.
         :param data_path (str): Path to json file containing data
         :return X (ndarray): Inputs
@@ -39,38 +49,30 @@ def load_data(data_path):
 
     import librosa
     from pathlib import Path
-    
-    print("Loading from stratified directories ...")
-    train_dir = Path("../0 - DADS dataset extraction/dataset_train")
-    val_dir = Path("../0 - DADS dataset extraction/dataset_val")
-    
-    def load_from_dir(base_dir):
-        X, y = [], []
-        for label in [0, 1]:
-            class_dir = base_dir / str(label)
-            for wav_file in sorted(class_dir.glob("*.wav")):
-                audio, sr = librosa.load(wav_file, sr=config.SAMPLE_RATE, duration=config.MEL_DURATION)
-                mel = librosa.feature.melspectrogram(y=audio, sr=sr,
-                                                     n_mels=config.MEL_N_MELS,
-                                                     n_fft=config.MEL_N_FFT,
-                                                     hop_length=config.MEL_HOP_LENGTH)
-                mel_db = librosa.power_to_db(mel, ref=np.max)
-                if mel_db.shape[1] < config.MEL_TIME_FRAMES:
-                    mel_db = np.pad(mel_db, ((0, 0), (0, config.MEL_TIME_FRAMES - mel_db.shape[1])), mode='constant', constant_values=(config.MEL_PAD_VALUE,))
-                else:
-                    mel_db = mel_db[:, :config.MEL_TIME_FRAMES]
-                X.append(mel_db)
-                y.append(label)
-        return np.array(X), np.array(y)
-    
-    X_train, y_train = load_from_dir(train_dir)
-    X_val, y_val = load_from_dir(val_dir)
-    return X_train, y_train, X_val, y_val
+    from sklearn.model_selection import train_test_split
 
+    # Get the train and val directories
+    print(f"[INFO] Loading precomputed features from {VAL_DATA_PATH}")
+    with open(VAL_DATA_PATH, 'r') as f:
+        val_data = json.load(f)
+    val_mels = np.array(val_data.get('mel', []))
+    val_labels = np.array(val_data.get('labels', []))
+    if len(val_mels) == 0:
+        raise RuntimeError(f"Precomputed features file {VAL_DATA_PATH} contains no 'mel' entries")
 
-def prepare_datasets(test_size, validation_size):
+    print(f"[INFO] Loading precomputed features from {TRAIN_DATA_PATH}")
+    with open(TRAIN_DATA_PATH, 'r') as f:
+        train_data = json.load(f)
+    train_mels = np.array(train_data.get('mel', []))
+    train_labels = np.array(train_data.get('labels', []))
+    if len(train_mels) == 0:
+        raise RuntimeError(f"Precomputed features file {TRAIN_DATA_PATH} contains no 'mel' entries")
+    return train_mels, train_labels, val_mels, val_labels
+    
+
+def prepare_datasets():
     # Load from stratified directories
-    X_train, y_train, X_validation, y_validation = load_data(DATA_PATH)
+    X_train, y_train, X_validation, y_validation = load_data()
     
     # No test split needed
     X_test = X_validation
@@ -152,7 +154,7 @@ if __name__ == "__main__":
     print()
     
     # Create train, validation and test sets.
-    X_train, X_validation, X_test, y_train, y_validation, y_test = prepare_datasets(0.25, 0.2)  # (test size, val size)
+    X_train, X_validation, X_test, y_train, y_validation, y_test = prepare_datasets()
 
     # Early stopping with minimum epochs.
     callback = keras.callbacks.EarlyStopping(monitor='val_loss', patience=10, start_from_epoch=args.min_epochs)
@@ -166,9 +168,9 @@ if __name__ == "__main__":
     if args.stratified_validation:
         from distance_stratified_callback import DistanceStratifiedCallback
         stratified_callback = DistanceStratifiedCallback(
-            validation_dir="../0 - DADS dataset extraction/dataset_val",
+            validation_dir=VAL_DATA_PATH,
             model_name="cnn",
-            log_dir="../0 - DADS dataset extraction/results"
+            log_dir=str(config.RESULTS_DIR)
         )
         callbacks_list.append(stratified_callback)
         print(colored("[INFO] Distance-stratified validation ENABLED", "green"))
@@ -189,7 +191,7 @@ if __name__ == "__main__":
         loss_fn = 'sparse_categorical_crossentropy'
     
     # Compile the network with improved loss and metrics
-    optimizer = keras.optimizers.Adam(learning_rate=0.0001)
+    optimizer = keras.optimizers.Adam(learning_rate=LEARNING_RATE)
     model.compile(optimizer=optimizer,
                   loss=loss_fn,
                   metrics=['accuracy'])
@@ -197,7 +199,7 @@ if __name__ == "__main__":
     model.summary()
 
     # Train the CNN.
-    history = model.fit(X_train, y_train, validation_data=(X_validation, y_validation), batch_size=16, epochs=1000,
+    history = model.fit(X_train, y_train, validation_data=(X_validation, y_validation), batch_size=BATCH_SIZE, epochs=1000,
                         callbacks=callbacks_list)
 
     # Save history.

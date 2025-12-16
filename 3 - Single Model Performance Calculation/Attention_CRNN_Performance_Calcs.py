@@ -16,189 +16,176 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import config
 
 # Read and save parameters.
-DATASET_PATH = config.DATASET_ROOT_STR  # Path of folder with testing audios
-SAVED_MODEL_PATH = config.CRNN_MODEL_PATH_STR  # Path of trained model
+DATASET_PATH = Path(config.PROJECT_ROOT / "0 - DADS dataset extraction" / "dataset_test")
+SAVED_MODEL_PATH = str(config.ATTENTION_CRNN_MODEL_PATH)  # Path of trained model
 SAMPLE_RATE = config.SAMPLE_RATE  # Sample rate in Hz.
 DURATION = config.DURATION  # Length of audio files fed. Measured in seconds. MUST MATCH TRAINING!
 SAMPLES_PER_TRACK = SAMPLE_RATE * DURATION
 
+# Precomputed MEL index path (optional)
+MEL_TEST_INDEX_PATH = Path(config.EXTRACTED_FEATURES_DIR) / "mel_test_index.json"
+
 # Predictions (1 or 0)
-JSON_PATH = config.CRNN_PREDICTIONS_PATH_STR  # CRNN predictions path
+JSON_PATH = str(config.ATTENTION_CRNN_PREDICTIONS_PATH)  # Attention CRNN predictions path
 # Performance scores (accuracy, precision, recall, f1 score)
-JSON_PERFORMANCE = config.CRNN_SCORES_PATH_STR  # CRNN scores path
+JSON_PERFORMANCE = str(config.ATTENTION_CRNN_SCORES_PATH)  # Attention CRNN scores path
 
 # Prediction of fed audio
 class _Class_Predict_Service:
     """Singleton class for keyword spotting inference with trained models.
     :param model: Trained model
     """
-    # Mapping so drone = 1.
     model = None
-    _mapping = [
-        1,
-        0
-    ]
     _instance = None
 
-    # Predict hard values (1 or 0).
-    def predict(self, file_path):
-        """
-        :param file_path (str): Path to audio file to predict
-        :return predicted_keyword (str): Keyword predicted by the model
-        """
+    # Predict probability for drone class (float between 0 and 1).
+    def predict(self, X):
+        predictions = self.model.predict(X, verbose=0)
+        if predictions.ndim > 1 and predictions.shape[1] > 1:
+            probs = predictions[:, 1]
+        else:
+            probs = predictions.reshape(-1)
+        return probs
 
-        # Extract mels from testing audio.
-        log_mel = self.preprocess(file_path)
-
-        # We need a 4-dim array to feed to the model for prediction: (# samples, # time steps, # coefficients, 1).
-        log_mel = log_mel[np.newaxis, ..., np.newaxis]
-
-        # Get the predicted label.
-        predictions = self.model.predict(log_mel)
-        predicted_index = np.argmax(predictions)
-        predicted_class = self._mapping[predicted_index]
-        return predicted_class
-
-    # Outputs certainty values for soft voting (1-0).
-    def preprocess(self, file_path, n_mels=config.MEL_N_MELS, n_fft=config.MEL_N_FFT, hop_length=config.MEL_HOP_LENGTH, num_segments=config.NUM_SEGMENTS):
-        """Extract MFCCs from audio file.
-        :param file_path (str): Path of audio file
-        :param n_mels (int): # of mels to extract
-        :param n_fft (int): Interval we consider to apply STFT. Measured in # of samples
-        :param hop_length (int): Sliding window for STFT. Measured in # of samples
-        """
-
-        num_samples_per_segment = int(SAMPLES_PER_TRACK / num_segments)
-
-        # Load audio file.
-        signal, sr = librosa.load(file_path, sr=SAMPLE_RATE)
-
-        # Process segments extracting mels and storing data.
-        for s in range(num_segments):
-            start_sample = num_samples_per_segment * s  # s=0 --> 0
-            finish_sample = start_sample + num_samples_per_segment  # s=0 --> num_samples_per_segment
-
-            # Extract segment and pad if too short
-            segment = signal[start_sample:finish_sample]
-            if len(segment) < num_samples_per_segment:
-                segment = np.pad(segment, (0, num_samples_per_segment - len(segment)), mode='constant')
-
-            # Extract mel specs.
-            mel = librosa.feature.melspectrogram(y=segment, sr=sr, n_mels=n_mels, n_fft=n_fft,
-                                                 hop_length=hop_length)
-            log_mel = librosa.power_to_db(mel)
-
-        return log_mel.T
+    # Extract mel for a single file (matches training config)
+    def preprocess(self, file_path):
+        signal, sr = librosa.load(file_path, sr=SAMPLE_RATE, duration=config.MEL_DURATION)
+        mel = librosa.feature.melspectrogram(
+            y=signal, sr=sr, n_mels=config.MEL_N_MELS, n_fft=config.MEL_N_FFT, hop_length=config.MEL_HOP_LENGTH
+        )
+        mel_db = librosa.power_to_db(mel, ref=np.max)
+        # Pad or trim to expected time frames
+        if mel_db.shape[1] < config.MEL_TIME_FRAMES:
+            mel_db = np.pad(mel_db, ((0, 0), (0, config.MEL_TIME_FRAMES - mel_db.shape[1])), mode='constant', constant_values=(config.MEL_PAD_VALUE,))
+        else:
+            mel_db = mel_db[:, :config.MEL_TIME_FRAMES]
+        return mel_db
 
 
 def Keyword_Spotting_Service():
-    """Factory function for Keyword_Spotting_Service class.
-    :return _Keyword_Spotting_Service._instance (_Keyword_Spotting_Service):
-    """
-
-    # Ensure an instance is created only the first time the factory function is called.
+    """Factory to get singleton model instance"""
     if _Class_Predict_Service._instance is None:
         _Class_Predict_Service._instance = _Class_Predict_Service()
-        # Load model without compiling (skip custom loss function deserialization)
         _Class_Predict_Service.model = tf.keras.models.load_model(SAVED_MODEL_PATH, compile=False)
     return _Class_Predict_Service._instance
 
 
 # Saving results into a json file.
-def save_mfcc(dataset_path, json_path):
-    # Dictionary to store data.
+def save_predictions(dataset_path: Path, json_path: str, limit: int = None):
+    # Build file lists explicitly (class 0 then class 1)
+    class0_dir = dataset_path / "0"
+    class1_dir = dataset_path / "1"
+    files0 = sorted([p for p in class0_dir.glob("*.wav")]) if class0_dir.exists() else []
+    files1 = sorted([p for p in class1_dir.glob("*.wav")]) if class1_dir.exists() else []
+
+    # Apply optional limit per class
+    if limit is not None and limit > 0:
+        per_class = max(1, limit // 2)
+        files0 = files0[:per_class]
+        files1 = files1[:per_class]
+
+    filenames = [p.name for p in files0] + [p.name for p in files1]
+    labels = [0] * len(files0) + [1] * len(files1)
+
+    # Load precomputed mel index if available and allowed
+    mel_index = None
+    if config.PRECOMPUTED_ONLY and MEL_TEST_INDEX_PATH.exists():
+        try:
+            with open(MEL_TEST_INDEX_PATH, 'r') as f:
+                mel_index = json.load(f)
+            if isinstance(mel_index, dict) and 'names' in mel_index and 'mels' in mel_index:
+                mel_index = {n: np.array(m) for n, m in zip(mel_index['names'], mel_index['mels'])}
+        except Exception:
+            mel_index = None
+
+    kss = Keyword_Spotting_Service()
+
+    scores = []
+
+    def get_mel_for_path(path: Path):
+        name = path.name
+        if mel_index is not None and name in mel_index:
+            mel = np.array(mel_index[name])
+            if mel.ndim == 3:
+                mel = mel.squeeze()
+            if mel.shape[1] < config.MEL_TIME_FRAMES:
+                mel = np.pad(mel, ((0, 0), (0, config.MEL_TIME_FRAMES - mel.shape[1])), mode='constant', constant_values=(config.MEL_PAD_VALUE,))
+            else:
+                mel = mel[:, :config.MEL_TIME_FRAMES]
+            return mel
+        else:
+            return kss.preprocess(str(path))
+
+    # Batch predict sequentially
+    all_paths = [*files0, *files1]
+    batch_size = 32
+    for i in range(0, len(all_paths), batch_size):
+        batch_paths = all_paths[i:i+batch_size]
+        X_batch = []
+        for p in batch_paths:
+            mel = get_mel_for_path(p)
+            X_batch.append(mel)
+        X_batch = np.stack(X_batch, axis=0)[..., np.newaxis]
+        preds = kss.predict(X_batch)
+        for prob in preds:
+            scores.append(float(prob))
+
+    threshold = config.MODEL_THRESHOLDS.get('Attention_CRNN', 0.5)
+    preds_bin = [1 if s > threshold else 0 for s in scores]
+
     data = {
-        "mapping": [],  # Maps different class labels --> background is mapped to 0.
-        "names": [],
-        "results": [],  # mels are the training input, labels are the target.
+        "mapping": ['0', '1'],
+        "names": filenames,
+        "results": preds_bin,
+        "scores": scores
     }
 
-    # Loop through all the classes.
-    for i, (dirpath, dirnames, filenames) in enumerate(os.walk(dataset_path)):
-
-        # Ensure that we're not at the root level.
-        if dirpath is not dataset_path:
-
-            # Save the semantic label.
-            dirpath_components = dirpath.split("/")  # class/background => ["class", "background"]
-            semantic_label = dirpath_components[-1]  # considering only the last value
-            data["mapping"].append(semantic_label)
-            print("\nProcessing {}".format(semantic_label))
-
-            # Process files for a specific class.
-            for f in filenames:
-                file_path = os.path.join(dirpath, f)
-
-                # Create 2 instances of the keyword spotting service.
-                kss = Keyword_Spotting_Service()
-                kss1 = Keyword_Spotting_Service()
-
-                # Check that different instances of the keyword spotting service point back to the same object.
-                assert kss is kss1
-
-                # Classify unseen audio.
-                keyword = kss.predict(file_path)
-
-                # Store mel for segment if it has the expected length.
-                data["names"].append(f)
-                data["results"].append(keyword)
-                print("{}".format(file_path))
-
     with open(json_path, "w") as fp:
-        json.dump(data, fp, indent=4)
+        json.dump(data, fp, indent=2)
+
+    return labels, preds_bin, scores, filenames
 
 
 # Calculating performance scores (accuracy, precision, recall, f-score).
-def performance_calcs(performance_path):
-    # Dictionary to store model performance results.
+def performance_calcs(performance_path, y_true, y_pred):
+    from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix
+
+    cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
+    tn, fp, fn, tp = int(cm[0, 0]), int(cm[0, 1]), int(cm[1, 0]), int(cm[1, 1])
+
+    acc = accuracy_score(y_true, y_pred)
+    prf = precision_recall_fscore_support(y_true, y_pred, labels=[0, 1], zero_division=0)
+    precision = prf[0].tolist()
+    recall = prf[1].tolist()
+    fscore = prf[2].tolist()
+
     performance = {
-        "TP": [],
-        "FN": [],
-        "TN": [],
-        "FP": [],
-        "Accuracy": [],
-        "Precision": [],
-        "Recall": [],
-        "F1 Score": [],
+        "TP": [tp],
+        "FN": [fn],
+        "TN": [tn],
+        "FP": [fp],
+        "Accuracy": [acc],
+        "Precision": precision,
+        "Recall": recall,
+        "F1 Score": fscore
     }
 
-    with open(JSON_PATH, "r") as fp:
-        data = json.load(fp)
-
-    # Convert lists to numpy arrays.
-    y = np.array(data["results"])
-
-    a = float(sum(y[0:int(len(y) / 2)]))
-    b = float(sum(y[int(len(y) / 2):int(len(y))]))
-
-    # Calculating TP, TN, FP, FN.
-    TP = a
-    FN = int(len(y) / 2) - a
-    FP = b
-    TN = int(len(y) / 2) - b
-
-    # Performance result calcs.
-    Accuracy = (TP + TN) / (TP + TN + FN + FP)
-    Precision = TP / (TP + FP)
-    Recall = TP / (TP + FN)
-    F1 = (2 * Precision * Recall) / (Precision + Recall)
-
-    performance["TP"].append(TP)
-    performance["FN"].append(FN)
-    performance["TN"].append(TN)
-    performance["FP"].append(FP)
-    performance["Accuracy"].append(Accuracy)
-    performance["Precision"].append(Precision)
-    performance["Recall"].append(Recall)
-    performance["F1 Score"].append(F1)
-
     with open(performance_path, "w") as fp:
-        json.dump(performance, fp, indent=4)
+        json.dump(performance, fp, indent=2)
+
+    return performance
 
 
 if __name__ == "__main__":
-    save_mfcc(DATASET_PATH, JSON_PATH)
-    performance_calcs(JSON_PERFORMANCE)
+    import argparse
 
-    print(
-        colored("CRNN model performance scores have been saved to {}.".format(JSON_PERFORMANCE), "green"))
+    parser = argparse.ArgumentParser(description='Evaluate Attention-CRNN on dataset_test')
+    parser.add_argument('--limit', type=int, default=0, help='Limit total number of files to evaluate (split across classes)')
+    args = parser.parse_args()
+
+    limit = args.limit if args.limit and args.limit > 0 else None
+    labels, preds_bin, scores, filenames = save_predictions(DATASET_PATH, JSON_PATH, limit=limit)
+    perf = performance_calcs(JSON_PERFORMANCE, labels, preds_bin)
+
+    print(colored(f"Attention-CRNN model performance scores have been saved to {JSON_PERFORMANCE}.", "green"))
+    print(json.dumps(perf, indent=2))

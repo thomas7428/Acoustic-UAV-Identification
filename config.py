@@ -22,12 +22,6 @@ CONFIG_DATASET_PATH = PROJECT_ROOT / "0 - DADS dataset extraction" / "augment_co
 
 # Feature extraction paths
 EXTRACTED_FEATURES_DIR = PROJECT_ROOT / "0 - DADS dataset extraction" / "extracted_features"
-MEL_DATA_PATH = EXTRACTED_FEATURES_DIR / "mel_data.json"
-MFCC_DATA_PATH = EXTRACTED_FEATURES_DIR / "mfcc_data.json"
-
-# Training data paths (compatibility with original naming)
-MEL_TRAIN_PATH = EXTRACTED_FEATURES_DIR / "mel_pitch_shift_9.0.json"
-MFCC_TRAIN_PATH = EXTRACTED_FEATURES_DIR / "mfcc_pitch_shift_9.0.json"
 
 # Model save directory
 MODELS_DIR = PROJECT_ROOT / "0 - DADS dataset extraction" / "saved_models"
@@ -142,9 +136,14 @@ AUDIO_DURATION_S = 4.0
 DURATION = int(AUDIO_DURATION_S)
 NUM_SEGMENTS = 10
 
+# WAV write subtype used by augmentation/save routines (must be a valid subtype for soundfile)
+# Examples: 'PCM_16', 'FLOAT'
+AUDIO_WAV_SUBTYPE = 'FLOAT'
+
 # Mel extraction parameters (central source of truth)
 # Use these values everywhere to ensure consistent features between
 # training, extraction and inference.
+MFCC_N_MFCC = 20            # number of MFCCs to extract
 MEL_DURATION = float(AUDIO_DURATION_S)        # seconds used per example at training/inference
 MEL_N_MELS = 44           # number of mel bins
 MEL_N_FFT = 2048          # FFT window size
@@ -152,12 +151,32 @@ MEL_HOP_LENGTH = 512      # hop length in samples
 MEL_TIME_FRAMES = 90      # number of time frames to pad/truncate to
 MEL_PAD_VALUE = -100.0    # sentinel padding value used in precomputed features
 
+# Feature extraction behaviors
+# When True, training extraction will enable SpecAugment by default unless
+# overridden on the command line in the extractor scripts.
+SPEC_AUGMENT_BY_DEFAULT_FOR_TRAIN = True
+
+# Output filenames for per-split extracted features. Use .format(split=...) to
+# produce concrete filenames. The extractors will write e.g. mel_train.json.
+MEL_OUTPUT_PATTERN = EXTRACTED_FEATURES_DIR / "mel_{split}.json"
+MFCC_OUTPUT_PATTERN = EXTRACTED_FEATURES_DIR / "mfcc_{split}.json"
+
+# Precomputed MEL index paths (one MEL per WAV). Evaluation code expects at
+# least `mel_test_index.json` when PRECOMPUTED_ONLY=True.
+MEL_TEST_DATA_PATH = EXTRACTED_FEATURES_DIR / "mel_test.json"
+MEL_TEST_INDEX_PATH = EXTRACTED_FEATURES_DIR / "mel_test_index.json"
+MEL_TRAIN_DATA_PATH = EXTRACTED_FEATURES_DIR / "mel_train.json"
+MEL_TRAIN_INDEX_PATH = EXTRACTED_FEATURES_DIR / "mel_train_index.json"
+MEL_VAL_DATA_PATH = EXTRACTED_FEATURES_DIR / "mel_val.json"
+MEL_VAL_INDEX_PATH = EXTRACTED_FEATURES_DIR / "mel_val_index.json"
+
 # Model inference configuration
 # Adaptive thresholds for each model (auto-calibrated or manually set)
 MODEL_THRESHOLDS = {
     "CNN": 0.5,      # Default threshold
     "RNN": 0.5,      # Will be auto-calibrated if AUTO_CALIBRATE_THRESHOLDS=True
     "CRNN": 0.5,
+    "Attention_CRNN": 0.5,
 }
 
 # Auto-calibration settings
@@ -200,10 +219,6 @@ def get_path_str(path):
 
 # String versions of paths (for scripts that need strings)
 DATASET_ROOT_STR = get_path_str(DATASET_ROOT)
-MEL_DATA_PATH_STR = get_path_str(MEL_DATA_PATH)
-MFCC_DATA_PATH_STR = get_path_str(MFCC_DATA_PATH)
-MEL_TRAIN_PATH_STR = get_path_str(MEL_TRAIN_PATH)
-MFCC_TRAIN_PATH_STR = get_path_str(MFCC_TRAIN_PATH)
 CNN_MODEL_PATH_STR = get_path_str(CNN_MODEL_PATH)
 CNN_HISTORY_PATH_STR = get_path_str(CNN_HISTORY_PATH)
 CNN_ACC_PATH_STR = get_path_str(CNN_ACC_PATH)
@@ -223,6 +238,16 @@ CRNN_SCORES_PATH_STR = get_path_str(CRNN_SCORES_PATH)
 VOTED_RESULTS_PATH_STR = get_path_str(VOTED_RESULTS_PATH)
 VOTING_WEIGHTS_PATH_STR = get_path_str(VOTING_WEIGHTS_PATH)
 VOTING_FINAL_SCORES_PATH_STR = get_path_str(VOTING_FINAL_SCORES_PATH)
+
+# String versions of feature extraction outputs and index paths
+MEL_OUTPUT_PATTERN_STR = get_path_str(MEL_OUTPUT_PATTERN)
+MFCC_OUTPUT_PATTERN_STR = get_path_str(MFCC_OUTPUT_PATTERN)
+MEL_TEST_DATA_PATH_STR = get_path_str(MEL_TEST_DATA_PATH)
+MEL_TEST_INDEX_PATH_STR = get_path_str(MEL_TEST_INDEX_PATH)
+MEL_TRAIN_DATA_PATH_STR = get_path_str(MEL_TRAIN_DATA_PATH)
+MEL_TRAIN_INDEX_PATH_STR = get_path_str(MEL_TRAIN_INDEX_PATH)
+MEL_VAL_DATA_PATH_STR = get_path_str(MEL_VAL_DATA_PATH)
+MEL_VAL_INDEX_PATH_STR = get_path_str(MEL_VAL_INDEX_PATH)
 
 # String versions of voted paths dictionaries
 VOTED_PATHS_STR = {k: get_path_str(v) for k, v in VOTED_PATHS.items()}

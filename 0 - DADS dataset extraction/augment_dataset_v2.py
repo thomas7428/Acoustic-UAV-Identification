@@ -18,8 +18,8 @@ Features:
 import os
 import json
 import argparse
+# Suppress cryptography deprecation warnings
 import warnings
-
 # Suppress cryptography deprecation warnings
 warnings.filterwarnings('ignore', category=DeprecationWarning, module='paramiko')
 warnings.filterwarnings('ignore', message='.*TripleDES.*')
@@ -32,13 +32,18 @@ from pathlib import Path
 from tqdm import tqdm
 import random
 from datetime import datetime
+import sys
+
+# Project config (centralized parameters and paths)
+sys.path.insert(0, str(Path(__file__).parent.parent))
+import config as project_config
 
 
 def load_config(config_path):
     """Load augmentation configuration from JSON file."""
     with open(config_path, 'r') as f:
-        config = json.load(f)
-    return config
+        config_data = json.load(f)
+    return config_data
 
 
 def crossfade(signal1, signal2, fade_duration_samples):
@@ -257,16 +262,16 @@ def apply_audio_effects(signal, sr, category_config):
     processed = signal.copy()
     
     # Pitch shifting
-    if category_config.get('enable_pitch_shift', False):
-        pitch_range = category_config.get('pitch_shift_range', [-1, 1])
+    if category_config['enable_pitch_shift']:
+        pitch_range = category_config['pitch_shift_range']
         n_steps = random.uniform(pitch_range[0], pitch_range[1])
         if abs(n_steps) > 0.1:  # Only apply if significant
             processed = librosa.effects.pitch_shift(processed, sr=sr, n_steps=n_steps)
             metadata['pitch_shift_steps'] = float(n_steps)
     
     # Time stretching
-    if category_config.get('enable_time_stretch', False):
-        stretch_range = category_config.get('time_stretch_range', [0.9, 1.1])
+    if category_config['enable_time_stretch']:
+        stretch_range = category_config['time_stretch_range']
         rate = random.uniform(stretch_range[0], stretch_range[1])
         if abs(rate - 1.0) > 0.01:  # Only apply if significant
             processed = librosa.effects.time_stretch(processed, rate=rate)
@@ -275,7 +280,7 @@ def apply_audio_effects(signal, sr, category_config):
     return processed, metadata
 
 
-def mix_drone_with_noise(drone_signal, noise_signals, target_snr_db, config, sr=22050):
+def mix_drone_with_noise(drone_signal, noise_signals, target_snr_db, config, sr=None):
     """
     Mix drone audio with background noises at specified SNR.
     Applies advanced augmentations (Doppler, modulation, reverb, time stretch) to drone signal.
@@ -292,44 +297,48 @@ def mix_drone_with_noise(drone_signal, noise_signals, target_snr_db, config, sr=
     """
     metadata = {}
     augmented_drone = drone_signal.copy()
+
+    # Ensure sample rate comes from central config if not provided
+    if sr is None:
+        sr = project_config.SAMPLE_RATE
     
-    # Apply advanced augmentations if enabled
-    advanced_config = config.get('advanced_augmentations', {})
-    
-    if advanced_config.get('enabled', False):
+    # Apply advanced augmentations if enabled (required keys in aug config)
+    advanced_config = config['advanced_augmentations']
+
+    if advanced_config['enabled']:
         # 1. Doppler Shift (50% probability)
-        if advanced_config.get('doppler_shift', {}).get('enabled', False) and np.random.rand() < 0.5:
-            shift_range = advanced_config['doppler_shift'].get('range', [-0.5, 0.5])
+        if advanced_config['doppler_shift']['enabled'] and np.random.rand() < 0.5:
+            shift_range = advanced_config['doppler_shift']['range']
             max_shift = max(abs(shift_range[0]), abs(shift_range[1]))
             augmented_drone, doppler = apply_doppler_shift(augmented_drone, sr, shift_range=max_shift)
             metadata['doppler_shift_semitones'] = doppler
-        
+
         # 2. Intensity Modulation (40% probability)
-        if advanced_config.get('intensity_modulation', {}).get('enabled', False) and np.random.rand() < 0.4:
-            freq_range = advanced_config['intensity_modulation'].get('freq_range', [0.5, 2.0])
-            depth = advanced_config['intensity_modulation'].get('depth', 0.3)
+        if advanced_config['intensity_modulation']['enabled'] and np.random.rand() < 0.4:
+            freq_range = advanced_config['intensity_modulation']['freq_range']
+            depth = advanced_config['intensity_modulation']['depth']
             augmented_drone, mod_freq = apply_intensity_modulation(augmented_drone, sr, 
                                                                     mod_freq_range=tuple(freq_range), 
                                                                     depth=depth)
             metadata['intensity_modulation_hz'] = mod_freq
-        
+
         # 3. Reverberation (30% probability)
-        if advanced_config.get('reverberation', {}).get('enabled', False) and np.random.rand() < 0.3:
-            delay_range = advanced_config['reverberation'].get('delay_range', [50, 200])
-            decay_range = advanced_config['reverberation'].get('decay_range', [0.2, 0.4])
+        if advanced_config['reverberation']['enabled'] and np.random.rand() < 0.3:
+            delay_range = advanced_config['reverberation']['delay_range']
+            decay_range = advanced_config['reverberation']['decay_range']
             augmented_drone, delay, decay = apply_reverberation(augmented_drone, sr, 
                                                                  delay_range=tuple(delay_range), 
                                                                  decay_range=tuple(decay_range))
             metadata['reverb_delay_ms'] = delay
             metadata['reverb_decay'] = decay
-        
+
         # 4. Time Stretch (20% probability)
-        if advanced_config.get('time_stretch', {}).get('enabled', False) and np.random.rand() < 0.2:
-            rate_range = advanced_config['time_stretch'].get('rate_range', [0.95, 1.05])
+        if advanced_config['time_stretch']['enabled'] and np.random.rand() < 0.2:
+            rate_range = advanced_config['time_stretch']['rate_range']
             augmented_drone, stretch_rate = apply_time_stretch_variation(augmented_drone, sr, 
                                                                           rate_range=tuple(rate_range))
             metadata['time_stretch_rate'] = stretch_rate
-            
+
             # Ensure duration matches after stretch
             if len(augmented_drone) != len(drone_signal):
                 if len(augmented_drone) > len(drone_signal):
@@ -454,7 +463,8 @@ def mix_background_noises(noise_signals, amplitude_range, config, category_confi
 def load_audio_file(file_path, sr, duration=None):
     """Load audio file with error handling."""
     try:
-        signal, _ = librosa.load(file_path, sr=sr, duration=duration)
+        # Force mono and resample to target sr
+        signal, _ = librosa.load(file_path, sr=sr, duration=duration, mono=True)
         return signal
     except Exception as e:
         # Silent failure for cleaner output
@@ -551,11 +561,13 @@ def generate_drone_augmented_samples(config, drone_files, no_drone_files, output
                     sr=sr
                 )
                 
-                # Save mixed audio
+                # Ensure exact duration and data type, then save mixed audio
                 if not dry_run:
+                    mixed_signal = ensure_duration(mixed_signal, sr, duration, crossfade_duration)
+                    mixed_signal = np.asarray(mixed_signal, dtype='float32')
                     output_filename = f"aug_{cat_name}_{i:05d}.wav"
                     output_path = output_dir / '1' / output_filename
-                    sf.write(output_path, mixed_signal, sr)
+                    sf.write(str(output_path), mixed_signal, sr, subtype=project_config.AUDIO_WAV_SUBTYPE)
                     
                     # Save metadata
                     sample_metadata = {
@@ -618,8 +630,8 @@ def generate_no_drone_augmented_samples(config, no_drone_files, output_dir, sr, 
         print(f"Category: {cat_name}")
         print(f"  Noise sources: {category['num_noise_sources']}")
         print(f"  Amplitude range: {category['amplitude_range']}")
-        print(f"  Pitch shift: {category.get('enable_pitch_shift', False)}")
-        print(f"  Time stretch: {category.get('enable_time_stretch', False)}")
+        print(f"  Pitch shift: {category['enable_pitch_shift']}")
+        print(f"  Time stretch: {category['enable_time_stretch']}")
         print(f"  Samples to generate: {samples_count}")
         
         stats['categories'][cat_name] = {
@@ -655,11 +667,13 @@ def generate_no_drone_augmented_samples(config, no_drone_files, output_dir, sr, 
                     sr
                 )
                 
-                # Save mixed audio
+                # Ensure exact duration and data type, then save mixed audio
                 if not dry_run:
+                    mixed_signal = ensure_duration(mixed_signal, sr, duration, crossfade_duration)
+                    mixed_signal = np.asarray(mixed_signal, dtype='float32')
                     output_filename = f"aug_{cat_name}_{i:05d}.wav"
                     output_path = output_dir / '0' / output_filename
-                    sf.write(output_path, mixed_signal, sr)
+                    sf.write(str(output_path), mixed_signal, sr, subtype=project_config.AUDIO_WAV_SUBTYPE)
                     
                     # Save metadata
                     sample_metadata = {
@@ -682,7 +696,7 @@ def generate_no_drone_augmented_samples(config, no_drone_files, output_dir, sr, 
     return stats
 
 
-def generate_augmented_samples(config, base_dir, dry_run=False):
+def generate_augmented_samples(aug_cfg, base_dir=None, dry_run=False):
     """
     Generate augmented audio samples for both drone and no-drone classes.
     
@@ -694,37 +708,32 @@ def generate_augmented_samples(config, base_dir, dry_run=False):
     Returns:
         Dictionary with generation statistics
     """
-    # Setup paths
-    base_path = Path(base_dir)
-    drone_dir = base_path / config['source_datasets']['drone_dir']
-    no_drone_dir = base_path / config['source_datasets']['no_drone_dir']
-    output_dir = base_path / config['output']['output_dir']
-    
-    # Get audio parameters (allow fallback to centralized config.AUDIO_DURATION_S)
-    audio_params = config.get('audio_parameters', {})
-    sr = audio_params.get('sample_rate', 22050)
-    duration = audio_params.get('target_duration_sec', None)
-    crossfade_duration = audio_params.get('crossfade_duration_sec', 0.1)
-    if duration is None:
-        try:
-            import config as _cfg
-            duration = float(getattr(_cfg, 'AUDIO_DURATION_S', 10.0))
-        except Exception:
-            duration = 10.0
-    
-    # Set random seed for reproducibility
-    random.seed(config['advanced']['random_seed'])
-    np.random.seed(config['advanced']['random_seed'])
+    # Prefer centralized project config for dataset root and audio params
+    base_path = Path(project_config.DATASET_ROOT)
+    # In dataset folders the classes are '0' (no-drone) and '1' (drone)
+    drone_dir = base_path / '1'
+    no_drone_dir = base_path / '0'
+    # Output augmented dataset folder under project extraction dir (strict)
+    output_dir = Path(project_config.DATASET_ROOT).parent / aug_cfg['output']['output_dir']
+
+    # Audio params from project config (single source of truth)
+    sr = project_config.SAMPLE_RATE
+    duration = float(project_config.AUDIO_DURATION_S)
+    crossfade_duration = aug_cfg['audio_parameters']['crossfade_duration_sec']
+
+    # Set random seed for reproducibility (required in config)
+    random.seed(aug_cfg['advanced']['random_seed'])
+    np.random.seed(aug_cfg['advanced']['random_seed'])
     
     # Get list of source files
-    drone_files = sorted(list(drone_dir.glob('*.wav')))
-    no_drone_files = sorted(list(no_drone_dir.glob('*.wav')))
+    drone_files = sorted(list(drone_dir.glob('*.wav'))) if drone_dir.exists() else []
+    no_drone_files = sorted(list(no_drone_dir.glob('*.wav'))) if no_drone_dir.exists() else []
     
     print(f"\n{'='*80}")
     print("ENHANCED DATASET AUGMENTATION v2.0")
     print(f"{'='*80}")
-    print(f"Source drone samples: {len(drone_files)}")
-    print(f"Source no-drone samples: {len(no_drone_files)}")
+    print(f"Source drone samples (from {drone_dir}): {len(drone_files)}")
+    print(f"Source no-drone samples (from {no_drone_dir}): {len(no_drone_files)}")
     print(f"Output directory: {output_dir}")
     
     if dry_run:
@@ -736,13 +745,13 @@ def generate_augmented_samples(config, base_dir, dry_run=False):
     
     # Generate drone augmented samples (class 1)
     drone_stats = generate_drone_augmented_samples(
-        config, drone_files, no_drone_files, output_dir, 
+        aug_cfg, drone_files, no_drone_files, output_dir, 
         sr, duration, crossfade_duration, dry_run
     )
     
     # Generate no-drone augmented samples (class 0)
     no_drone_stats = generate_no_drone_augmented_samples(
-        config, no_drone_files, output_dir,
+        aug_cfg, no_drone_files, output_dir,
         sr, duration, crossfade_duration, dry_run
     )
     
@@ -750,20 +759,20 @@ def generate_augmented_samples(config, base_dir, dry_run=False):
     combined_stats = {
         'drone_augmentation': drone_stats,
         'no_drone_augmentation': no_drone_stats,
-        'total_generated': drone_stats.get('total_generated', 0) + no_drone_stats.get('total_generated', 0),
-        'total_errors': drone_stats.get('errors', 0) + no_drone_stats.get('errors', 0)
+        'total_generated': drone_stats['total_generated'] + no_drone_stats['total_generated'],
+        'total_errors': drone_stats['errors'] + no_drone_stats['errors']
     }
     
     # Save combined metadata to JSON
-    if not dry_run and config['output']['save_mixing_info']:
-        all_metadata = drone_stats.get('metadata', []) + no_drone_stats.get('metadata', [])
-        metadata_path = output_dir / config['output']['info_filename']
+    if not dry_run and aug_cfg['output']['save_mixing_info']:
+        all_metadata = drone_stats['metadata'] + no_drone_stats['metadata']
+        metadata_path = output_dir / aug_cfg['output']['info_filename']
         
         with open(metadata_path, 'w') as f:
             json.dump({
                 'generation_time': datetime.now().isoformat(),
                 'version': '2.0',
-                'config': config,
+                'config': aug_cfg,
                 'statistics': {
                     'drone_augmentation': {k: v for k, v in drone_stats.items() if k != 'metadata'},
                     'no_drone_augmentation': {k: v for k, v in no_drone_stats.items() if k != 'metadata'},
@@ -787,8 +796,8 @@ def print_summary(stats):
     if 'drone_augmentation' in stats and stats['drone_augmentation']:
         drone_stats = stats['drone_augmentation']
         print(f"\nDrone Augmentation (Class 1):")
-        print(f"  Total generated: {drone_stats.get('total_generated', 0)}")
-        print(f"  Errors: {drone_stats.get('errors', 0)}")
+        print(f"  Total generated: {drone_stats['total_generated']}")
+        print(f"  Errors: {drone_stats['errors']}")
         
         if 'categories' in drone_stats:
             for cat_name, cat_stats in drone_stats['categories'].items():
@@ -801,8 +810,8 @@ def print_summary(stats):
     if 'no_drone_augmentation' in stats and stats['no_drone_augmentation']:
         no_drone_stats = stats['no_drone_augmentation']
         print(f"\nNo-Drone Augmentation (Class 0):")
-        print(f"  Total generated: {no_drone_stats.get('total_generated', 0)}")
-        print(f"  Errors: {no_drone_stats.get('errors', 0)}")
+        print(f"  Total generated: {no_drone_stats['total_generated']}")
+        print(f"  Errors: {no_drone_stats['errors']}")
         
         if 'categories' in no_drone_stats:
             for cat_name, cat_stats in no_drone_stats['categories'].items():
@@ -811,8 +820,8 @@ def print_summary(stats):
     
     # Overall stats
     print(f"\n{'─'*80}")
-    print(f"TOTAL Generated: {stats.get('total_generated', 0)}")
-    print(f"TOTAL Errors: {stats.get('total_errors', 0)}")
+    print(f"TOTAL Generated: {stats['total_generated']}")
+    print(f"TOTAL Errors: {stats['total_errors']}")
     print(f"{'='*80}\n")
 
 
@@ -839,8 +848,8 @@ Examples:
     parser.add_argument(
         '--config',
         type=str,
-        default='augment_config_v2.json',
-        help='Path to augmentation configuration JSON file (default: augment_config_v2.json)'
+        required=True,
+        help='Path to augmentation configuration JSON file (required)'
     )
     
     parser.add_argument(
@@ -855,16 +864,16 @@ Examples:
     script_dir = Path(__file__).parent
     config_path = script_dir / args.config
     
-    # Load configuration
+    # Load configuration (strict - no fallback allowed)
     if not config_path.exists():
         print(f"[ERROR] Config file not found: {config_path}")
         return 1
-    
+
     print(f"Loading configuration from: {config_path}")
-    config = load_config(config_path)
-    
-    # Generate augmented samples
-    stats = generate_augmented_samples(config, script_dir, dry_run=args.dry_run)
+    aug_cfg = load_config(config_path)
+
+    # Generate augmented samples (uses centralized paths in config.py)
+    stats = generate_augmented_samples(aug_cfg, dry_run=args.dry_run)
     
     # Print summary
     print_summary(stats)

@@ -5,6 +5,12 @@ import json
 import warnings
 import numpy as np
 import argparse
+from pathlib import Path
+
+# Import centralized configuration
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent))
+import config
 
 # Suppress the librosa warning about n_fft being too large
 warnings.filterwarnings('ignore', message='n_fft=.*is too large for input signal of length=.*')
@@ -43,36 +49,17 @@ def spec_augment(mel_spec, time_mask_width=10, freq_mask_width=8, num_masks=2):
     
     return augmented
 
-# Import configuration from centralized config
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent))
-try:
-    import config
-    DATASET_PATH = config.DATASET_ROOT_STR
-    JSON_PATH = config.MEL_TRAIN_PATH_STR
-except ImportError:
-    # Fallback to manual paths if config doesn't exist
-    DATASET_PATH = "..."  # Path of folder with training audios.
-    JSON_PATH = ".../mel_data.json"  # Location and file name to save feature extracted data.
-
 # Default audio params (may be overridden by centralized `config.py` below)
-SAMPLE_RATE = 22050  # Sample rate in Hz.
-DURATION = 10.0  # Length of audio files fed. Measured in seconds.
-
-# If `config.py` is available, use centralized constants so the
-# preprocessing matches augmentation and training targets.
-try:
-    import config as _cfg
-    SAMPLE_RATE = getattr(_cfg, 'SAMPLE_RATE', SAMPLE_RATE)
-    DURATION = float(getattr(_cfg, 'AUDIO_DURATION_S', DURATION))
-except Exception:
-    pass
-
+SAMPLE_RATE = config.SAMPLE_RATE
+DURATION = config.DURATION
 SAMPLES_PER_TRACK = int(SAMPLE_RATE * DURATION)
 
+# Default dataset path and output path are derived from `config`.
+DEFAULT_DATASET_PATH = Path(getattr(config, 'DATASET_ROOT_STR', '.'))
 
-def save_mfcc(dataset_path, json_path, n_mels=90, n_fft=2048, hop_length=512, num_segments=5):
+
+
+def save_mfcc(dataset_path, out_path, n_mels=config.MEL_N_MELS, n_fft=config.MEL_N_FFT, hop_length=config.MEL_HOP_LENGTH, num_segments=config.NUM_SEGMENTS, apply_spec_augment=False):
     # num_segments let's you chop up track into different segments to create a bigger dataset.
     # Value is changed at the bottom of the script.
 
@@ -85,6 +72,10 @@ def save_mfcc(dataset_path, json_path, n_mels=90, n_fft=2048, hop_length=512, nu
 
     num_samples_per_segment = int(SAMPLES_PER_TRACK / num_segments)
     expected_num_mel_vectors_per_segment = math.ceil(num_samples_per_segment / hop_length)
+
+    # Prepare index containers (one MEL per WAV)
+    index_names = []
+    index_mels = []
 
     # Loops through all the folders in the training audio folder.
     for i, (dirpath, dirnames, filenames) in enumerate(os.walk(dataset_path)):
@@ -103,7 +94,25 @@ def save_mfcc(dataset_path, json_path, n_mels=90, n_fft=2048, hop_length=512, nu
 
                 # Loads audio file.
                 file_path = os.path.join(dirpath, f)
-                signal, sr = librosa.load(file_path, sr=SAMPLE_RATE)
+                signal, sr = librosa.load(file_path, sr=SAMPLE_RATE, duration=config.MEL_DURATION)
+
+                # Precompute canonical mel for this WAV (non-augmented) by taking the
+                # central segment if num_segments > 1, or the only segment when ==1.
+                # We'll compute the mel for the full signal and extract the central
+                # segment's mel frame-wise to ensure shape consistency.
+                # Compute full mel spec for canonical storage (n_mels, frames)
+                full_mel = librosa.feature.melspectrogram(y=signal, sr=sr, n_fft=n_fft, n_mels=n_mels, hop_length=hop_length)
+                # Use same reference as training/inference (ref=np.max) to ensure consistent dB scaling
+                full_db = librosa.power_to_db(full_mel, ref=np.max)
+                # Normalize/truncate/pad canonical mel to MEL_TIME_FRAMES
+                if full_db.shape[1] < config.MEL_TIME_FRAMES:
+                    pad_width = config.MEL_TIME_FRAMES - full_db.shape[1]
+                    canonical_mel = np.pad(full_db, ((0,0),(0,pad_width)), mode='constant', constant_values=(config.MEL_PAD_VALUE,))
+                else:
+                    canonical_mel = full_db[:, :config.MEL_TIME_FRAMES]
+                # Store index entry (names and mel as list)
+                index_names.append(f)
+                index_mels.append(canonical_mel.tolist())
 
                 # Process segments, extracting mels and storing data to JSON_PATH.
                 for s in range(num_segments):
@@ -117,72 +126,115 @@ def save_mfcc(dataset_path, json_path, n_mels=90, n_fft=2048, hop_length=512, nu
                     if len(segment) < num_samples_per_segment:
                         segment = np.pad(segment, (0, num_samples_per_segment - len(segment)), mode='constant')
 
-                    mel = librosa.feature.melspectrogram(y=segment,
+                    mel_spec = librosa.feature.melspectrogram(y=segment,
                                                          sr=sr,
                                                          n_fft=n_fft,
                                                          n_mels=n_mels,
                                                          hop_length=hop_length)
-                    db_mel = librosa.power_to_db(mel)
-                    mel = db_mel.T
+                    # Use same dB reference as trainers/evaluators
+                    db_mel = librosa.power_to_db(mel_spec, ref=np.max)
+                    # Keep orientation (n_mels, time) to match training/evaluation code
+                    mel = db_mel
                     
                     # Apply SpecAugment with 50% probability (configurable via global)
-                    if hasattr(save_mfcc, 'apply_spec_augment') and save_mfcc.apply_spec_augment:
+                    if apply_spec_augment:
+                        # When enabled, apply SpecAugment with 50% probability.
+                        # spec_augment expects (time_steps, n_mels), so transpose, augment, then transpose back.
                         if np.random.rand() < 0.5:
-                            mel = spec_augment(mel, 
-                                             time_mask_width=10, 
-                                             freq_mask_width=8, 
-                                             num_masks=2)
+                            aug = spec_augment(mel.T,
+                                               time_mask_width=10,
+                                               freq_mask_width=8,
+                                               num_masks=2)
+                            mel = aug.T
 
-                    # Stores mels for segment, if it has the expected length.
-                    if len(mel) == expected_num_mel_vectors_per_segment:
+                    # Stores mels for segment, if it has the expected length (time axis == expected frames).
+                    if mel.shape[1] == expected_num_mel_vectors_per_segment:
                         data["mel"].append(mel.tolist())
                         data["labels"].append(i - 1)
                         print("{}, segment:{}".format(file_path, s + 1))
 
-    with open(json_path, "w") as fp:
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(out_path, "w") as fp:
         json.dump(data, fp, indent=4)
+
+    # Write index file: one MEL per WAV (canonical non-augmented)
+    index_path = Path(config.EXTRACTED_FEATURES_DIR) / f"mel_{split}_index.json"
+    with open(index_path, 'w') as idxf:
+        json.dump({"names": index_names, "mels": index_mels}, idxf)
+
+    # Optionally write compressed .npz for fast loading (handled by caller arg)
+    if getattr(save_mfcc, 'write_npz', False):
+        npz_path = index_path.with_suffix('.npz')
+        names_arr = np.array(index_names)
+        mels_arr = np.array(index_mels)
+        np.savez_compressed(str(npz_path), names=names_arr, mels=mels_arr)
 
 
 if __name__ == "__main__":
-    # Parse command-line arguments
+    # Par
     parser = argparse.ArgumentParser(description='Extract Mel spectrograms with optional SpecAugment')
-    parser.add_argument('--spec_augment', action='store_true', 
-                       help='Apply SpecAugment (time/frequency masking) to 50%% of samples')
+    parser.add_argument('--spec_augment', choices=['auto','on','off'], default='auto',
+                       help='Apply SpecAugment: auto=enable for train per config, on=force, off=disable')
+    parser.add_argument('--split', choices=['train','val','test'], default='train')
     parser.add_argument('--num_segments', type=int, default=10,
                        help='Number of segments per audio file (default: 10)')
+    parser.add_argument('--write-npz', action='store_true', dest='write_npz', help='Also write compressed .npz index')
     args = parser.parse_args()
     
-    # Configure SpecAugment
-    save_mfcc.apply_spec_augment = args.spec_augment
+    # Determine split and default behavior
+    split = args.split
+    # Default spec augment enabled for training when configured
+    if args.spec_augment == 'on':
+        apply_spec = True
+    elif args.spec_augment == 'off':
+        apply_spec = False
+    else:  # auto
+        if split == 'train' and getattr(config, 'SPEC_AUGMENT_BY_DEFAULT_FOR_TRAIN', True):
+            apply_spec = True
+        else:
+            apply_spec = False
     
-    # Display configuration
-    print("\n" + "="*60)
-    print("🎵 MEL SPECTROGRAM FEATURE EXTRACTION")
-    print("="*60)
-    print(f"📂 Dataset: {DATASET_PATH}")
-    print(f"💾 Output: {JSON_PATH}")
-    print(f"🔊 Sample Rate: {SAMPLE_RATE} Hz")
-    print(f"⏱️  Duration: {DURATION} seconds")
-    print(f"🔪 Segments: {args.num_segments}")
-    print(f"🎭 SpecAugment: {'✅ ENABLED (50% probability)' if args.spec_augment else '❌ DISABLED'}")
-    print("="*60 + "\n")
+    # (Display will occur after we resolve dataset/output paths below)
     
     # Use centralized config defaults where available
-    try:
-        import config
-        default_n_mels = config.MEL_N_MELS
-        default_n_fft = config.MEL_N_FFT
-        default_hop = config.MEL_HOP_LENGTH
-        default_segments = config.NUM_SEGMENTS
-    except Exception:
-        default_n_mels = 90
-        default_n_fft = 2048
-        default_hop = 512
-        default_segments = args.num_segments
+    n_mels = getattr(config, 'MEL_N_MELS', 90)
+    n_fft = getattr(config, 'MEL_N_FFT', 2048)
+    hop = getattr(config, 'MEL_HOP_LENGTH', 512)
+    segments = args.num_segments if args.num_segments is not None else getattr(config, 'NUM_SEGMENTS', 10)
 
-    save_mfcc(DATASET_PATH, JSON_PATH, n_mels=default_n_mels, n_fft=default_n_fft,
-              hop_length=default_hop, num_segments=default_segments)
+    # Resolve dataset path supporting two common layouts:
+    # 1) DATASET_ROOT/{train,val,test} (e.g. dataset_combined/train)
+    # 2) sibling folders named dataset_train, dataset_val, dataset_test
+    dataset_root = Path(config.DATASET_ROOT) if hasattr(config, 'DATASET_ROOT') else Path(DEFAULT_DATASET_PATH)
+    parent_dir = dataset_root.parent
+    candidate1 = parent_dir / f"dataset_{split}"
+
+    if candidate1.exists():
+        dataset_path = candidate1
+    else:
+        raise FileNotFoundError(f"Could not find dataset split for '{split}'. Tried: '{candidate1}'")
+
+    # Determine output path per split
+    out_path = Path(config.EXTRACTED_FEATURES_DIR) / f"mel_{split}.json"
+
+    # Display configuration
+    print("\n" + "="*60)
+    print("MEL SPECTROGRAM FEATURE EXTRACTION")
+    print("="*60)
+    print(f"Dataset: {dataset_path}")
+    print(f"Output: {out_path}")
+    print(f"Sample Rate: {SAMPLE_RATE} Hz")
+    print(f"Duration: {DURATION} seconds")
+    print(f"Segments: {args.num_segments}")
+    print(f"SpecAugment: {'ENABLED (50% probability)' if apply_spec else 'DISABLED'}")
+    print("="*60 + "\n")
+
+    # Allow optional writing of .npz index via a flag
+    save_mfcc.write_npz = args.write_npz
+    save_mfcc(dataset_path, out_path, n_mels=n_mels, n_fft=n_fft, hop_length=hop, num_segments=segments, apply_spec_augment=apply_spec)
     
     print("\n" + "="*60)
-    print("✅ Feature extraction complete!")
+    print("Feature extraction complete!")
+    print(f"Output: {out_path}")
     print("="*60)

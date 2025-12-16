@@ -34,14 +34,7 @@ from datetime import datetime
 import librosa
 import soundfile as sf
 import numpy as np
-
-# Ensure project root is available on sys.path so `import config` succeeds
-# even when the script is executed as a subprocess or from another cwd.
-SCRIPT_DIR = Path(__file__).parent.resolve()
-PROJECT_ROOT = SCRIPT_DIR.parent.resolve()
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
+import config
 import config
 
 
@@ -109,6 +102,7 @@ def cleanup_directories(script_dir, dry_run=False):
         'dataset_combined',
         'dataset_train',
         'dataset_val',
+        'dataset_dads',
         'extracted_features'
     ]
     
@@ -234,26 +228,21 @@ def combine_datasets(original_dir, augmented_dir, output_dir, dry_run=False):
             print(f"\n  Class {class_dir}: Copying {len(files)} original files...")
             if not dry_run:
                 # Normalize originals to target duration and sample rate when copying
-                target_sr = getattr(config, 'SAMPLE_RATE', 22050)
-                target_dur = getattr(config, 'AUDIO_DURATION_S', None)
+                target_sr = config.SAMPLE_RATE
+                target_dur = config.AUDIO_DURATION_S
                 for file in files:
                     dest = output_path / class_dir / f"orig_{file.name}"
                     try:
-                        if target_dur is None:
-                            # fallback to raw copy
-                            shutil.copy2(file, dest)
-                        else:
-                            # Load, resample and pad/truncate to target duration
-                            y, _ = librosa.load(str(file), sr=target_sr)
-                            target_samples = int(target_sr * float(target_dur))
-                            if len(y) > target_samples:
-                                y = y[:target_samples]
-                            elif len(y) < target_samples:
-                                y = np.pad(y, (0, target_samples - len(y)), mode='constant')
-                            sf.write(str(dest), y, target_sr)
+                        # Load, resample and pad/truncate to target duration
+                        y, _ = librosa.load(str(file), sr=target_sr)
+                        target_samples = int(target_sr * float(target_dur))
+                        if len(y) > target_samples:
+                            y = y[:target_samples]
+                        elif len(y) < target_samples:
+                            y = np.pad(y, (0, target_samples - len(y)), mode='constant')
+                        sf.write(str(dest), y, target_sr)
                     except Exception:
-                        # On failure, fall back to raw copy to avoid blocking pipeline
-                        shutil.copy2(file, dest)
+                        raise RuntimeError(f"Failed to process original file: {file}")
             total_copied += len(files)
         
         # Copy from augmented
@@ -281,7 +270,7 @@ def step_1_download(script_dir, drone_samples, no_drone_samples, dry_run):
     cmd = [
         sys.executable,
         "download_and_prepare_dads.py",
-        "--output", "dataset_test",
+        "--output", "dataset_dads",
         "--max-per-class", str(max(drone_samples, no_drone_samples))
     ]
     

@@ -22,9 +22,10 @@ from datasets import load_dataset
 import librosa
 import soundfile as sf
 from tqdm import tqdm
+import config
 
 # Target sample rate for the project (matches Mel_Preprocess_and_Feature_Extract.py).
-TARGET_SAMPLE_RATE = 22050
+TARGET_SAMPLE_RATE = config.SAMPLE_RATE
 
 
 def download_and_prepare_dads(output_dir, max_samples=None, max_per_class=None, verbose=True):

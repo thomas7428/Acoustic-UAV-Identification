@@ -25,8 +25,9 @@ import pandas as pd
 from pathlib import Path
 from termcolor import colored
 
-# Add parent directory to path for imports
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Project config
+sys.path.append(str(Path(__file__).parent.parent))
+import config
 
 # TensorFlow imports
 import tensorflow as tf
@@ -34,74 +35,76 @@ from tensorflow import keras
 from tensorflow.keras import layers, models
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
 
-# Configuration
-DATASET_DIR = Path("../0 - DADS dataset extraction")
-FEATURES_PATH = DATASET_DIR / "extracted_features" / "mel_pitch_shift_9.0.json"
-MODEL_SAVE = DATASET_DIR / "saved_models" / "attention_crnn_model.keras"
-HISTORY_SAVE = DATASET_DIR / "results" / "attention_crnn_history.csv"
+# Use centralized configuration
+DATASET_DIR = Path(config.PROJECT_ROOT) / "0 - DADS dataset extraction"
+TRAIN_DATA_PATH = Path(config.MEL_TRAIN_DATA_PATH)
+VAL_DATA_PATH = Path(config.MEL_VAL_DATA_PATH)
+MODEL_SAVE = Path(config.ATTENTION_CRNN_MODEL_PATH)
+HISTORY_SAVE = Path(config.ATTENTION_CRNN_HISTORY_PATH)
 
-# Training parameters
-BATCH_SIZE = 16
-LEARNING_RATE = 0.0001
+# Training parameters (respect config when present)
+BATCH_SIZE = getattr(config, 'BATCH_SIZE', 16)
+LEARNING_RATE = getattr(config, 'LEARNING_RATE', 0.0001)
 
+SAMPLE_RATE = config.SAMPLE_RATE
+N_MELS = config.MEL_N_MELS
+N_FFT = config.MEL_N_FFT
+HOP_LENGTH = config.MEL_HOP_LENGTH
+TIME_FRAMES = config.MEL_TIME_FRAMES
+PAD_VALUE = config.MEL_PAD_VALUE
 
 def load_data():
-    """Load data directly from stratified train/val directories."""
+    """Loads training dataset from json file.
+        :param data_path (str): Path to json file containing data
+        :return X (ndarray): Inputs
+        :return y (ndarray): Targets
+    """
+
     import librosa
     from pathlib import Path
+    from sklearn.model_selection import train_test_split
+
+    # Get the train and val directories
+    print(f"[INFO] Loading precomputed features from {VAL_DATA_PATH}")
+    with open(VAL_DATA_PATH, 'r') as f:
+        val_data = json.load(f)
+    val_mels = np.array(val_data.get('mel', []))
+    val_labels = np.array(val_data.get('labels', []))
+    if len(val_mels) == 0:
+        raise RuntimeError(f"Precomputed features file {VAL_DATA_PATH} contains no 'mel' entries")
+
+    print(f"[INFO] Loading precomputed features from {TRAIN_DATA_PATH}")
+    with open(TRAIN_DATA_PATH, 'r') as f:
+        train_data = json.load(f)
+    train_mels = np.array(train_data.get('mel', []))
+    train_labels = np.array(train_data.get('labels', []))
+    if len(train_mels) == 0:
+        raise RuntimeError(f"Precomputed features file {TRAIN_DATA_PATH} contains no 'mel' entries")
+    return train_mels, train_labels, val_mels, val_labels
     
-    print(colored("[INFO] Loading from dataset_train and dataset_val (stratified by distance)...", "cyan"))
-    
-    train_dir = Path("../0 - DADS dataset extraction/dataset_train")
-    val_dir = Path("../0 - DADS dataset extraction/dataset_val")
-    
-    def load_from_dir(base_dir, desc):
-        X, y = [], []
-        
-        # Load class 0 (no-drone)
-        class_0_dir = base_dir / "0"
-        for wav_file in sorted(class_0_dir.glob("*.wav")):
-            audio, sr = librosa.load(wav_file, sr=22050, duration=4.0)
-            mel = librosa.feature.melspectrogram(y=audio, sr=sr, n_mels=44, n_fft=2048, hop_length=512)
-            mel_db = librosa.power_to_db(mel, ref=np.max)
-            
-            if mel_db.shape[1] < 90:
-                mel_db = np.pad(mel_db, ((0, 0), (0, 90 - mel_db.shape[1])), mode='constant')
-            else:
-                mel_db = mel_db[:, :90]
-            
-            X.append(mel_db)
-            y.append(0)
-        
-        print(f"  [{desc}] Loaded {len(y)} no-drone samples")
-        
-        # Load class 1 (drone)
-        class_1_dir = base_dir / "1"
-        drone_count_start = len(y)
-        for wav_file in sorted(class_1_dir.glob("*.wav")):
-            audio, sr = librosa.load(wav_file, sr=22050, duration=4.0)
-            mel = librosa.feature.melspectrogram(y=audio, sr=sr, n_mels=44, n_fft=2048, hop_length=512)
-            mel_db = librosa.power_to_db(mel, ref=np.max)
-            
-            if mel_db.shape[1] < 90:
-                mel_db = np.pad(mel_db, ((0, 0), (0, 90 - mel_db.shape[1])), mode='constant')
-            else:
-                mel_db = mel_db[:, :90]
-            
-            X.append(mel_db)
-            y.append(1)
-        
-        print(f"  [{desc}] Loaded {len(y) - drone_count_start} drone samples")
-        
-        return np.array(X), np.array(y)
-    
-    X_train, y_train = load_from_dir(train_dir, "TRAIN")
-    X_val, y_val = load_from_dir(val_dir, "VAL")
-    
-    print(f"\n[INFO] Training: {len(X_train)} samples ({np.sum(y_train==1)} drones, {np.sum(y_train==0)} ambient)")
-    print(f"[INFO] Validation: {len(X_val)} samples ({np.sum(y_val==1)} drones, {np.sum(y_val==0)} ambient)")
-    print(f"[INFO] Input shape: {X_train.shape[1:]}")
-    
+def prepare_datasets():
+    """Load precomputed mel features and labels, return arrays:
+    X_train, y_train, X_val, y_val
+    """
+    X_train, y_train, X_val, y_val = load_data()
+
+    X_train = np.asarray(X_train)
+    X_val = np.asarray(X_val)
+    y_train = np.asarray(y_train)
+    y_val = np.asarray(y_val)
+
+    # Filter out samples with missing labels (None)
+    train_mask = np.array([lbl is not None for lbl in y_train])
+    val_mask = np.array([lbl is not None for lbl in y_val])
+    if not np.all(train_mask):
+        X_train = X_train[train_mask]
+        y_train = y_train[train_mask]
+        print(f"[INFO] Filtered out {np.sum(~train_mask)} training samples with missing labels")
+    if not np.all(val_mask):
+        X_val = X_val[val_mask]
+        y_val = y_val[val_mask]
+        print(f"[INFO] Filtered out {np.sum(~val_mask)} validation samples with missing labels")
+
     return X_train, y_train, X_val, y_val
 
 
@@ -226,21 +229,28 @@ def main():
     print(colored("="*70, "magenta"))
     print(colored(f"[CONFIG] Min epochs: {args.min_epochs}", "yellow"))
     print(colored(f"[CONFIG] Stratified validation: {args.stratified_validation}", "yellow"))
-    
-    # Load data (already split by distance in dataset_train/dataset_val)
-    X_train, y_train, X_val, y_val = load_data()
-    
-    # Add channel dimension for Conv2D
-    X_train = X_train[..., np.newaxis]
-    X_val = X_val[..., np.newaxis]
-    
+    # Load datasets
+    X_train, y_train, X_val, y_val = prepare_datasets()
+
+    # Add channel dimension for Conv2D if necessary
+    if X_train.ndim == 3:
+        X_train = X_train[..., np.newaxis]
+    if X_val.ndim == 3:
+        X_val = X_val[..., np.newaxis]
+
+    # Build model using the actual training shape (like CNN_Trainer does)
+    if X_train.ndim != 4:
+        raise ValueError(f"X_train must be 4D after adding channel dim, got {X_train.shape}")
+    n_mels_actual = X_train.shape[1]
+    train_tf = X_train.shape[2]
+
     # Convert labels to categorical
-    y_train = keras.utils.to_categorical(y_train, num_classes=2)
-    y_val = keras.utils.to_categorical(y_val, num_classes=2)
-    
+    y_train = keras.utils.to_categorical(y_train.astype(int), num_classes=2)
+    y_val = keras.utils.to_categorical(y_val.astype(int), num_classes=2)
+
     # Build model
     print(colored("\n[INFO] Building Attention-Enhanced CRNN...", "cyan"))
-    model = build_attention_crnn(input_shape=(44, 90))
+    model = build_attention_crnn(input_shape=(n_mels_actual, train_tf))
     
     # Compile with recall-focused loss (heavily penalizes missing drones)
     from loss_functions import get_loss_function
@@ -249,10 +259,7 @@ def main():
         optimizer=keras.optimizers.Adam(learning_rate=LEARNING_RATE),
         loss=get_loss_function(loss_type='recall_focused', fn_penalty=50.0),
         metrics=['accuracy']
-    )
-    
-    print(colored("[INFO] Using RECALL-FOCUSED LOSS (FN penalty=50x)", "yellow"))
-    
+    )    
     model.summary()
     
     # Callbacks
@@ -278,20 +285,19 @@ def main():
     if args.stratified_validation:
         from distance_stratified_callback import DistanceStratifiedCallback
         stratified_callback = DistanceStratifiedCallback(
-            validation_dir="../0 - DADS dataset extraction/dataset_val",
+            validation_dir=VAL_DATA_PATH,
             model_name="attention_crnn",
-            log_dir="../0 - DADS dataset extraction/results"
+            log_dir=str(config.RESULTS_DIR)
         )
         callbacks_list.append(stratified_callback)
         print(colored("[INFO] Distance-stratified validation ENABLED", "green"))
     
     # Train
     print(colored("\n[INFO] Starting training...", "cyan"))
-    print(colored("[INFO] Using stratified validation set (45% @ 500m, 25% @ 350m)", "green"))
     history = model.fit(
         X_train,
         y_train,
-        validation_data=(X_val, y_val),  # Now uses correct stratified validation
+        validation_data=(X_val, y_val),
         batch_size=BATCH_SIZE,
         epochs=1000,
         callbacks=callbacks_list,

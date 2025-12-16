@@ -251,26 +251,42 @@ run_feature_extraction() {
     cd "$PROJECT_DIR/1 - Preprocessing and Features Extraction"
     
     log INFO "Extracting MEL features..."
-    if "$VENV_PATH" Mel_Preprocess_and_Feature_Extract.py 2>&1 | tee -a "$LOG_FILE"; then
-        log SUCCESS "MEL feature extraction completed"
+    if "$VENV_PATH" Mel_Preprocess_and_Feature_Extract.py --split train 2>&1 | tee -a "$LOG_FILE"; then
+        log SUCCESS "MEL feature extraction for training completed"
     else
-        log ERROR "MEL feature extraction failed"
+        log ERROR "MEL feature extraction for training failed"
+        exit 1
+    fi
+    if "$VENV_PATH" Mel_Preprocess_and_Feature_Extract.py --split test 2>&1 | tee -a "$LOG_FILE"; then
+        log SUCCESS "MEL feature extraction for test completed"
+    else
+        log ERROR "MEL feature extraction for test failed"
+        exit 1
+    fi
+    if "$VENV_PATH" Mel_Preprocess_and_Feature_Extract.py --split val 2>&1 | tee -a "$LOG_FILE"; then
+        log SUCCESS "MEL feature extraction for validation completed"
+    else
+        log ERROR "MEL feature extraction for validation failed"
         exit 1
     fi
     
     log INFO "Extracting MFCC features..."
-    if "$VENV_PATH" MFCC_Preprocess_and_Feature_Extract.py 2>&1 | tee -a "$LOG_FILE"; then
-        log SUCCESS "MFCC feature extraction completed"
+    if "$VENV_PATH" MFCC_Preprocess_and_Feature_Extract.py --split train 2>&1 | tee -a "$LOG_FILE"; then
+        log SUCCESS "MFCC feature extraction for training completed"
     else
-        log ERROR "MFCC feature extraction failed"
+        log ERROR "MFCC feature extraction for training failed"
         exit 1
     fi
-
-    log INFO "Extracting MEL test index from WAVs..."
-    if "$VENV_PATH" regenerate_mel_test_index_from_wavs.py 2>&1 | tee -a "$LOG_FILE"; then
-        log SUCCESS "MEL test index extraction completed"
+    if "$VENV_PATH" MFCC_Preprocess_and_Feature_Extract.py --split test 2>&1 | tee -a "$LOG_FILE"; then
+        log SUCCESS "MFCC feature extraction for test completed"
     else
-        log ERROR "MEL test index extraction failed"
+        log ERROR "MFCC feature extraction for test failed"
+        exit 1
+    fi
+    if "$VENV_PATH" MFCC_Preprocess_and_Feature_Extract.py --split val 2>&1 | tee -a "$LOG_FILE"; then
+        log SUCCESS "MFCC feature extraction for validation completed"
+    else
+        log ERROR "MFCC feature extraction for validation failed"
         exit 1
     fi
     
