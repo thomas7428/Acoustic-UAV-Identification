@@ -37,6 +37,34 @@ import sys
 # Project config (centralized parameters and paths)
 sys.path.insert(0, str(Path(__file__).parent.parent))
 import config as project_config
+# Use shared audio distortion utilities
+try:
+    from tools.audio_distortions import apply_distortion_chain
+except Exception:
+    # Fallback: define a passthrough
+    def apply_distortion_chain(audio, sr, conf):
+        return audio
+
+# Shared audio utilities (looping/crossfade/ensure_duration)
+try:
+    from tools.audio_utils import ensure_duration, loop_audio, crossfade, load_audio_file
+except Exception:
+    # If tools.audio_utils isn't available, define local fallbacks
+    def ensure_duration(signal, sr, target_duration, crossfade_duration=0.1):
+        target_samples = int(target_duration * sr)
+        if len(signal) == target_samples:
+            return signal
+        elif len(signal) > target_samples:
+            return signal[:target_samples]
+        else:
+            # simple pad fallback
+            return np.pad(signal, (0, target_samples - len(signal)), mode='constant')
+    def load_audio_file(file_path, sr, duration=None):
+        try:
+            signal, _ = librosa.load(file_path, sr=sr, duration=duration, mono=True)
+            return signal
+        except Exception:
+            return None
 
 
 def load_config(config_path):
@@ -46,81 +74,7 @@ def load_config(config_path):
     return config_data
 
 
-def crossfade(signal1, signal2, fade_duration_samples):
-    """
-    Apply crossfade between two audio signals.
-    
-    Args:
-        signal1: First audio signal (numpy array)
-        signal2: Second audio signal (numpy array)
-        fade_duration_samples: Number of samples for crossfade
-    
-    Returns:
-        Crossfaded signal
-    """
-    if fade_duration_samples == 0 or len(signal1) < fade_duration_samples:
-        return np.concatenate([signal1, signal2])
-    
-    # Create fade curves
-    fade_out = np.linspace(1, 0, fade_duration_samples)
-    fade_in = np.linspace(0, 1, fade_duration_samples)
-    
-    # Apply crossfade to overlapping region
-    end_part = signal1[-fade_duration_samples:] * fade_out
-    start_part = signal2[:fade_duration_samples] * fade_in
-    crossfaded_part = end_part + start_part
-    
-    # Combine signals
-    result = np.concatenate([
-        signal1[:-fade_duration_samples],
-        crossfaded_part,
-        signal2[fade_duration_samples:]
-    ])
-    
-    return result
-
-
-def loop_audio(signal, target_duration, sr, crossfade_duration=0.1):
-    """
-    Loop audio signal to reach target duration with smooth crossfade transitions.
-    
-    Args:
-        signal: Audio signal (numpy array)
-        target_duration: Target duration in seconds
-        sr: Sample rate
-        crossfade_duration: Duration of crossfade in seconds
-    
-    Returns:
-        Looped audio signal
-    """
-    target_samples = int(target_duration * sr)
-    signal_length = len(signal)
-    
-    # If signal is already long enough, just trim
-    if signal_length >= target_samples:
-        return signal[:target_samples]
-    
-    # Calculate crossfade samples
-    crossfade_samples = int(crossfade_duration * sr)
-    crossfade_samples = min(crossfade_samples, signal_length // 4)  # Max 25% of signal length
-    
-    # Loop the signal with crossfade
-    result = signal.copy()
-    
-    while len(result) < target_samples:
-        if len(result) + signal_length - crossfade_samples <= target_samples:
-            # Add full signal with crossfade
-            result = crossfade(result, signal, crossfade_samples)
-        else:
-            # Add partial signal to reach exact duration
-            remaining = target_samples - len(result)
-            if remaining > crossfade_samples:
-                result = crossfade(result, signal[:remaining], crossfade_samples)
-            else:
-                # Not enough space for crossfade, simple concatenation
-                result = np.concatenate([result, signal[:remaining]])
-    
-    return result[:target_samples]
+# crossfade/loop_audio/ensure_duration provided by tools.audio_utils (imported above)
 
 
 def calculate_snr(signal, noise):
@@ -439,7 +393,13 @@ def mix_background_noises(noise_signals, amplitude_range, config, category_confi
         mixed /= len(noise_signals)
     
     # Apply audio effects (pitch shift, time stretch)
-    mixed, effects_metadata = apply_audio_effects(mixed, sr, category_config)
+    # Prefer centralized distortion utilities
+    try:
+        distorted = apply_distortion_chain(mixed, sr, category_config.get('augmentation_params', {}))
+        mixed = distorted
+        effects_metadata = {}
+    except Exception:
+        mixed, effects_metadata = apply_audio_effects(mixed, sr, category_config)
     
     # Normalize to prevent clipping
     max_amplitude = config['audio_parameters']['max_amplitude']
@@ -460,28 +420,7 @@ def mix_background_noises(noise_signals, amplitude_range, config, category_confi
     return mixed, metadata
 
 
-def load_audio_file(file_path, sr, duration=None):
-    """Load audio file with error handling."""
-    try:
-        # Force mono and resample to target sr
-        signal, _ = librosa.load(file_path, sr=sr, duration=duration, mono=True)
-        return signal
-    except Exception as e:
-        # Silent failure for cleaner output
-        return None
-
-
-def ensure_duration(signal, sr, target_duration, crossfade_duration=0.1):
-    """Ensure audio signal has exact target duration (loop or pad as needed)."""
-    target_samples = int(target_duration * sr)
-    
-    if len(signal) == target_samples:
-        return signal
-    elif len(signal) > target_samples:
-        return signal[:target_samples]
-    else:
-        # Loop with crossfade
-        return loop_audio(signal, target_duration, sr, crossfade_duration)
+# `load_audio_file` and `ensure_duration` are provided by `tools.audio_utils`
 
 
 def generate_drone_augmented_samples(config, drone_files, no_drone_files, output_dir, sr, duration, crossfade_duration, dry_run=False):
@@ -709,12 +648,25 @@ def generate_augmented_samples(aug_cfg, base_dir=None, dry_run=False):
         Dictionary with generation statistics
     """
     # Prefer centralized project config for dataset root and audio params
-    base_path = Path(project_config.DATASET_ROOT)
-    # In dataset folders the classes are '0' (no-drone) and '1' (drone)
-    drone_dir = base_path / '1'
-    no_drone_dir = base_path / '0'
-    # Output augmented dataset folder under project extraction dir (strict)
-    output_dir = Path(project_config.DATASET_ROOT).parent / aug_cfg['output']['output_dir']
+    # Resolve source dataset dirs: allow override in aug_cfg['source_datasets'] but default to DATASET_DADS_DIR
+    if aug_cfg.get('source_datasets') and aug_cfg['source_datasets'].get('drone_dir'):
+        candidate = Path(aug_cfg['source_datasets']['drone_dir'])
+        drone_dir = candidate if candidate.is_absolute() else Path(project_config.EXTRACTION_DIR) / candidate
+    else:
+        drone_dir = Path(project_config.DATASET_DADS_DIR) / '1'
+
+    if aug_cfg.get('source_datasets') and aug_cfg['source_datasets'].get('no_drone_dir'):
+        candidate = Path(aug_cfg['source_datasets']['no_drone_dir'])
+        no_drone_dir = candidate if candidate.is_absolute() else Path(project_config.EXTRACTION_DIR) / candidate
+    else:
+        no_drone_dir = Path(project_config.DATASET_DADS_DIR) / '0'
+
+    # Output augmented dataset folder: prefer centralized DATASET_AUGMENTED_DIR
+    if aug_cfg['output'].get('output_dir'):
+        out_candidate = Path(aug_cfg['output']['output_dir'])
+        output_dir = out_candidate if out_candidate.is_absolute() else Path(project_config.EXTRACTION_DIR) / out_candidate
+    else:
+        output_dir = Path(project_config.DATASET_AUGMENTED_DIR)
 
     # Audio params from project config (single source of truth)
     sr = project_config.SAMPLE_RATE
@@ -766,9 +718,15 @@ def generate_augmented_samples(aug_cfg, base_dir=None, dry_run=False):
     # Save combined metadata to JSON
     if not dry_run and aug_cfg['output']['save_mixing_info']:
         all_metadata = drone_stats['metadata'] + no_drone_stats['metadata']
-        metadata_path = output_dir / aug_cfg['output']['info_filename']
-        
-        with open(metadata_path, 'w') as f:
+        # Sanitize filename from config and ensure .json extension
+        raw_name = str(aug_cfg['output'].get('info_filename', 'augmentation_metadata.json')).strip()
+        if not raw_name.lower().endswith('.json'):
+            raw_name = raw_name + '.json'
+        metadata_path = output_dir / raw_name
+
+        # Atomic write: write to temp file then rename
+        tmp_path = metadata_path.with_suffix('.tmp')
+        with open(tmp_path, 'w') as f:
             json.dump({
                 'generation_time': datetime.now().isoformat(),
                 'version': '2.0',
@@ -781,6 +739,13 @@ def generate_augmented_samples(aug_cfg, base_dir=None, dry_run=False):
                 },
                 'samples': all_metadata
             }, f, indent=2)
+        # Move tmp to final path
+        try:
+            tmp_path.replace(metadata_path)
+        except Exception:
+            # Fallback to os.rename
+            import os
+            os.replace(str(tmp_path), str(metadata_path))
         print(f"\n[OK] Metadata saved to: {metadata_path}")
     
     return combined_stats

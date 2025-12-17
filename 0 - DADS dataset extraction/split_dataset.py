@@ -23,6 +23,9 @@ from datetime import datetime
 import random
 import numpy as np
 from tqdm import tqdm
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import config
 
 
 def set_random_seed(seed=42):
@@ -150,11 +153,11 @@ def create_dataset_splits(source_dir, output_base, train_ratio, val_ratio, test_
     for class_label, files in files_by_class.items():
         print(f"  Class {class_label}: {len(files)} files")
     
-    # Create output directories
+    # Create output directories (use canonical names from config)
     output_path = Path(output_base)
-    train_dir = output_path / "dataset_train"
-    val_dir = output_path / "dataset_val"
-    test_dir = output_path / "dataset_test"
+    train_dir = output_path / Path(config.DATASET_TRAIN_DIR).name
+    val_dir = output_path / Path(config.DATASET_VAL_DIR).name
+    test_dir = output_path / Path(config.DATASET_TEST_DIR).name
     
     if not dry_run:
         train_dir.mkdir(parents=True, exist_ok=True)

@@ -23,6 +23,7 @@ import librosa
 import soundfile as sf
 from tqdm import tqdm
 import config
+from tools.audio_utils import ensure_duration
 
 # Target sample rate for the project (matches Mel_Preprocess_and_Feature_Extract.py).
 TARGET_SAMPLE_RATE = config.SAMPLE_RATE
@@ -150,6 +151,10 @@ def download_and_prepare_dads(output_dir, max_samples=None, max_per_class=None, 
             # Load audio from bytes using soundfile
             import io
             audio_array, original_sr = sf.read(io.BytesIO(audio_bytes))
+
+            # Ensure mono: if multi-channel, convert to mono by averaging channels
+            if hasattr(audio_array, 'ndim') and audio_array.ndim > 1:
+                audio_array = audio_array.mean(axis=1)
             
             # Resample to target sample rate if needed.
             if original_sr != TARGET_SAMPLE_RATE:
@@ -164,8 +169,19 @@ def download_and_prepare_dads(output_dir, max_samples=None, max_per_class=None, 
             output_filename = f"dads_{label}_{stats['per_class'][label]['saved']:06d}.wav"
             output_path = os.path.join(label_dir, output_filename)
             
-            # Save as WAV file (float32).
-            sf.write(output_path, audio_array, TARGET_SAMPLE_RATE, subtype='FLOAT')
+            # Ensure float32 dtype and resample if necessary
+            audio_array = audio_array.astype('float32')
+
+            # Enforce exact target duration by looping/trimming with crossfade
+            audio_array = ensure_duration(audio_array, TARGET_SAMPLE_RATE, float(config.AUDIO_DURATION_S), crossfade_duration=0.1)
+
+            # Save as WAV file using project-configured subtype.
+            try:
+                subtype = getattr(config, 'AUDIO_WAV_SUBTYPE', 'FLOAT')
+            except Exception:
+                subtype = 'FLOAT'
+
+            sf.write(output_path, audio_array, TARGET_SAMPLE_RATE, subtype=subtype)
             
             # Update statistics.
             stats["per_class"][label]["saved"] += 1

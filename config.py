@@ -17,6 +17,15 @@ DEFAULT_DATASET = "dataset_combined"  # Use combined dataset by default
 DATASET_NAME = os.environ.get("DATASET_ROOT_OVERRIDE", DEFAULT_DATASET)
 DATASET_ROOT = PROJECT_ROOT / "0 - DADS dataset extraction" / DATASET_NAME
 
+# Canonical dataset folders (centralized names used across scripts)
+EXTRACTION_DIR = PROJECT_ROOT / "0 - DADS dataset extraction"
+DATASET_DADS_DIR = EXTRACTION_DIR / "dataset_dads"
+DATASET_AUGMENTED_DIR = EXTRACTION_DIR / "dataset_augmented"
+DATASET_COMBINED_DIR = EXTRACTION_DIR / "dataset_combined"
+DATASET_TRAIN_DIR = EXTRACTION_DIR / "dataset_train"
+DATASET_VAL_DIR = EXTRACTION_DIR / "dataset_val"
+DATASET_TEST_DIR = EXTRACTION_DIR / "dataset_test"
+
 # Config of datasets used for training and validation
 CONFIG_DATASET_PATH = PROJECT_ROOT / "0 - DADS dataset extraction" / "augment_config_v3.json"
 
