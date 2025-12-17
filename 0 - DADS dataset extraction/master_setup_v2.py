@@ -34,6 +34,7 @@ from datetime import datetime
 import librosa
 import soundfile as sf
 import numpy as np
+import random
 import config
 try:
     from tools.audio_utils import ensure_duration
@@ -264,6 +265,103 @@ def combine_datasets(original_dir, augmented_dir, output_dir, dry_run=False):
     return True
 
 
+def distribute_sources_to_splits(original_dir, augmented_dir, train_dir, val_dir, test_dir,
+                                 train_ratio, val_ratio, test_ratio, dry_run=False, random_seed=42):
+    """
+    Collect files from `original_dir` and `augmented_dir` and distribute them
+    directly into `train_dir`, `val_dir`, and `test_dir` according to ratios.
+    This avoids an intermediate combined directory and prevents leakage by
+    stratifying per-class and using a fixed random seed.
+    """
+    print_info("Distributing originals and augmentations into train/val/test...")
+    original_path = Path(original_dir)
+    augmented_path = Path(augmented_dir)
+    train_path = Path(train_dir)
+    val_path = Path(val_dir)
+    test_path = Path(test_dir)
+
+    stats = {}
+
+    if not dry_run:
+        train_path.mkdir(parents=True, exist_ok=True)
+        val_path.mkdir(parents=True, exist_ok=True)
+        test_path.mkdir(parents=True, exist_ok=True)
+
+    rng = random.Random(random_seed)
+
+    for class_label in ['0', '1']:
+        src_files = []
+        orig_class = original_path / class_label
+        aug_class = augmented_path / class_label
+        if orig_class.exists():
+            src_files.extend(sorted(list(orig_class.glob('*.wav'))))
+        if aug_class.exists():
+            src_files.extend(sorted(list(aug_class.glob('*.wav'))))
+
+        total = len(src_files)
+        stats[class_label] = {'total': total}
+
+        if total == 0:
+            print_warning(f"No source files found for class {class_label} (skipping)")
+            stats[class_label].update({'train': 0, 'val': 0, 'test': 0})
+            continue
+
+        # Shuffle deterministically
+        rng.shuffle(src_files)
+
+        n_train = int(total * train_ratio)
+        n_val = int(total * val_ratio)
+        n_test = total - n_train - n_val
+
+        stats[class_label].update({'train': n_train, 'val': n_val, 'test': n_test})
+
+        # Create class subdirs
+        if not dry_run:
+            (train_path / class_label).mkdir(parents=True, exist_ok=True)
+            (val_path / class_label).mkdir(parents=True, exist_ok=True)
+            (test_path / class_label).mkdir(parents=True, exist_ok=True)
+
+        # Copy files
+        idx = 0
+        for f in src_files:
+            if idx < n_train:
+                dst = train_path / class_label / f.name
+            elif idx < n_train + n_val:
+                dst = val_path / class_label / f.name
+            else:
+                dst = test_path / class_label / f.name
+
+            if dry_run:
+                print(f"Would copy {f} -> {dst}")
+            else:
+                try:
+                    shutil.copy2(f, dst)
+                except Exception as e:
+                    print_error(f"Failed to copy {f} to {dst}: {e}")
+            idx += 1
+
+    print_success("Distribution complete")
+    return stats
+
+
+def step_3_distribute_and_split(script_dir, train_ratio, val_ratio, test_ratio, dry_run):
+    """Wrapper step to distribute originals and augmentations directly into splits."""
+    print_step(3, 5, "Distribute Originals + Augmentations into Splits")
+    try:
+        originals = config.DATASET_DADS_DIR
+        augmented = config.DATASET_AUGMENTED_DIR
+        train_dir = config.DATASET_TRAIN_DIR
+        val_dir = config.DATASET_VAL_DIR
+        test_dir = config.DATASET_TEST_DIR
+
+        distribute_sources_to_splits(originals, augmented, train_dir, val_dir, test_dir,
+                                     train_ratio, val_ratio, test_ratio, dry_run=dry_run, random_seed=42)
+        return True
+    except Exception as e:
+        print_error(f"Distribution failed: {e}")
+        return False
+
+
 def step_1_download(script_dir, drone_samples, no_drone_samples, dry_run):
     """Step 1: Download DADS dataset."""
     print_step(1, 6, "Download DADS Dataset")
@@ -323,14 +421,10 @@ def step_3_combine(script_dir, dry_run):
     """Step 3: Combine original and augmented datasets."""
     print_step(3, 5, "Combine Original + Augmented")
     
-    # Use the downloaded DADS originals (dataset_dads) as the source of originals
-    # This matches the downloader which writes to `dataset_dads`.
-    return combine_datasets(
-        original_dir=config.DATASET_DADS_DIR,
-        augmented_dir=config.DATASET_AUGMENTED_DIR,
-        output_dir=config.DATASET_COMBINED_DIR,
-        dry_run=dry_run
-    )
+    # Deprecated: combine is handled by the new distribution step which places
+    # originals and augmentations directly into the train/val/test folders.
+    print_info("Combine step is deprecated; use distribution step instead")
+    return True
 
 
 def step_4_split(script_dir, train_ratio, val_ratio, test_ratio, dry_run):
@@ -390,7 +484,7 @@ def step_5_summary(script_dir):
 
     # Count files in each dataset folder under script_dir
     datasets = [
-        'dataset_dads', 'dataset_augmented', 'dataset_combined',
+        'dataset_dads', 'dataset_augmented',
         'dataset_train', 'dataset_val', 'dataset_test'
     ]
 
@@ -520,18 +614,11 @@ Examples:
     else:
         print_info("Skipping augmentation step (using existing dataset_augmented)")
     
-    # Step 3: Combine
-    success = step_3_combine(script_dir, args.dry_run)
-    steps_success.append(('Combine', success))
+    # Step 3: Distribute originals + augmentations into splits
+    success = step_3_distribute_and_split(script_dir, args.train, args.val, args.test, args.dry_run)
+    steps_success.append(('Distribute+Split', success))
     if not success and not args.dry_run:
-        print_error("Setup failed at combine step")
-        return 1
-    
-    # Step 4: Split
-    success = step_4_split(script_dir, args.train, args.val, args.test, args.dry_run)
-    steps_success.append(('Split', success))
-    if not success and not args.dry_run:
-        print_error("Setup failed at split step")
+        print_error("Setup failed at distribution step")
         return 1
     
     # Step 5: Validate

@@ -18,24 +18,23 @@ import seaborn as sns
 from pathlib import Path
 import pandas as pd
 
-# Import project config
+# Import project config + plot utils
 sys.path.insert(0, str(Path(__file__).parent.parent))
 import config
+from tools import plot_utils
 
-# Set style
-sns.set_style("whitegrid")
-plt.rcParams['figure.figsize'] = (12, 8)
-plt.rcParams['font.size'] = 10
+# Apply consistent plotting style
+plot_utils.set_style()
 
 
 def load_augmentation_metadata():
     """Load augmentation metadata."""
-    metadata_path = config.PROJECT_ROOT / "0 - DADS dataset extraction" / "dataset_augmented" / "augmentation_metadata.json"
-    
+    metadata_path = config.DATASET_AUGMENTED_DIR / "augmentation_metadata.json"
+
     if not metadata_path.exists():
         print("[WARNING] Augmentation metadata not found")
         return None
-    
+
     with open(metadata_path, 'r') as f:
         return json.load(f)
 
@@ -91,13 +90,7 @@ def plot_snr_performance():
     ax.axhline(y=0, color='black', linestyle='-', linewidth=0.8, alpha=0.5)
     
     plt.tight_layout()
-    
-    # Save
-    output_dir = Path(__file__).parent / 'outputs'
-    output_dir.mkdir(exist_ok=True)
-    plt.savefig(output_dir / 'snr_performance.png', dpi=300, bbox_inches='tight')
-    print(f"[OK] Saved: {output_dir / 'snr_performance.png'}")
-    
+    plot_utils.save_figure(fig, 'snr_performance.png', script_path=__file__)
     return fig
 
 
@@ -166,13 +159,7 @@ def plot_augmentation_composition():
     ax2.grid(axis='y', alpha=0.3)
     
     plt.tight_layout()
-    
-    # Save
-    output_dir = Path(__file__).parent / 'outputs'
-    output_dir.mkdir(exist_ok=True)
-    plt.savefig(output_dir / 'augmentation_composition.png', dpi=300, bbox_inches='tight')
-    print(f"[OK] Saved: {output_dir / 'augmentation_composition.png'}")
-    
+    plot_utils.save_figure(fig, 'augmentation_composition.png', script_path=__file__)
     return fig
 
 
@@ -261,13 +248,7 @@ def plot_dataset_evolution():
     ax.grid(axis='y', alpha=0.3)
     
     plt.tight_layout()
-    
-    # Save
-    output_dir = Path(__file__).parent / 'outputs'
-    output_dir.mkdir(exist_ok=True)
-    plt.savefig(output_dir / 'dataset_evolution.png', dpi=300, bbox_inches='tight')
-    print(f"[OK] Saved: {output_dir / 'dataset_evolution.png'}")
-    
+    plot_utils.save_figure(fig, 'dataset_evolution.png', script_path=__file__)
     return fig
 
 

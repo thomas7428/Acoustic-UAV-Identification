@@ -22,17 +22,22 @@ import librosa
 import librosa.display
 import matplotlib.pyplot as plt
 import numpy as np
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent))
+import config
+from tools import plot_utils
+
+# ensure consistent plotting style
+plot_utils.set_style()
 
 
-PROJECT_ROOT = Path(__file__).parent.parent
-BASE_DATASET = PROJECT_ROOT / "0 - DADS dataset extraction"
 SEARCH_DIRS = [
-    BASE_DATASET / 'dataset_augmented',
-    BASE_DATASET / 'dataset_combined',
-    BASE_DATASET / 'dataset_test',
+    config.DATASET_AUGMENTED_DIR,
+    config.DATASET_COMBINED_DIR,
+    config.DATASET_TEST_DIR,
 ]
 
-OUTPUT_DIR = Path(__file__).parent / 'outputs' / 'audio_examples'
+OUTPUT_DIR = plot_utils.get_output_dir(__file__) / 'audio_examples'
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -67,7 +72,9 @@ def pick_examples():
     return picks
 
 
-def make_waveform_and_spectrogram(src_path, dst_dir, sr=22050):
+def make_waveform_and_spectrogram(src_path, dst_dir, sr=None):
+    if sr is None:
+        sr = int(getattr(config, 'SAMPLE_RATE', 22050))
     y, _ = librosa.load(src_path, sr=sr, mono=True)
     name = src_path.stem
 

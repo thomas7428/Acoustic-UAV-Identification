@@ -20,14 +20,13 @@ import pandas as pd
 from sklearn.metrics import confusion_matrix, classification_report, roc_curve, auc
 import importlib.util
 
-# Import project config
+# Import project config + plot utils
 sys.path.insert(0, str(Path(__file__).parent.parent))
 import config
+from tools import plot_utils
 
-# Set style
-sns.set_style("whitegrid")
-plt.rcParams['figure.figsize'] = (12, 8)
-plt.rcParams['font.size'] = 10
+# Apply consistent plotting style
+plot_utils.set_style()
 
 
 def _load_converter_module():
@@ -150,10 +149,7 @@ def plot_training_curves():
     plt.tight_layout()
     
     # Save
-    output_dir = Path(__file__).parent / 'outputs'
-    output_dir.mkdir(exist_ok=True)
-    plt.savefig(output_dir / 'training_curves.png', dpi=300, bbox_inches='tight')
-    print(f"[OK] Saved: {output_dir / 'training_curves.png'}")
+    plot_utils.save_figure(fig, 'training_curves.png', script_path=__file__)
     
     return fig
 
@@ -191,10 +187,7 @@ def plot_confusion_matrices():
     plt.tight_layout()
     
     # Save
-    output_dir = Path(__file__).parent / 'outputs'
-    output_dir.mkdir(exist_ok=True)
-    plt.savefig(output_dir / 'confusion_matrices.png', dpi=300, bbox_inches='tight')
-    print(f"[OK] Saved: {output_dir / 'confusion_matrices.png'}")
+    plot_utils.save_figure(fig, 'confusion_matrices.png', script_path=__file__)
     
     return fig
 
@@ -264,10 +257,7 @@ def plot_metrics_comparison():
     plt.tight_layout()
     
     # Save
-    output_dir = Path(__file__).parent / 'outputs'
-    output_dir.mkdir(exist_ok=True)
-    plt.savefig(output_dir / 'metrics_comparison.png', dpi=300, bbox_inches='tight')
-    print(f"[OK] Saved: {output_dir / 'metrics_comparison.png'}")
+    plot_utils.save_figure(fig, 'metrics_comparison.png', script_path=__file__)
     
     return fig
 
@@ -316,9 +306,7 @@ def generate_performance_table():
     df = pd.DataFrame(table_data)
     
     # Save to CSV
-    output_dir = Path(__file__).parent / 'outputs'
-    output_dir.mkdir(exist_ok=True)
-    
+    output_dir = plot_utils.get_output_dir(__file__)
     csv_path = output_dir / 'performance_table.csv'
     df.to_csv(csv_path, index=False)
     print(f"[OK] Saved: {csv_path}")

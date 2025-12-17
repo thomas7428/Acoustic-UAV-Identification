@@ -282,12 +282,6 @@
     "save_mixing_info": true,
     "info_filename": "augmentation_metadata.json"
   },
-  
-  "source_datasets": {
-    "drone_dir": "dataset_test/1",
-    "no_drone_dir": "dataset_test/0"
-  },
-  
   "advanced": {
     "random_seed": 42,
     "enable_random_offset": true,

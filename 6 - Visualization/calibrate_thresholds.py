@@ -29,18 +29,18 @@ import config
 # Import ML libraries
 from tensorflow import keras
 
-# Set style
-sns.set_style("whitegrid")
-plt.rcParams['figure.figsize'] = (16, 10)
+# Set style via plot utils and use centralized config paths
+from tools import plot_utils
+plot_utils.set_style()
 
 # Paths
-DATASET_TEST_PATH = Path(__file__).parent.parent / "0 - DADS dataset extraction" / "dataset_test"
-OUTPUT_DIR = Path(__file__).parent / "outputs"
+DATASET_TEST_PATH = config.DATASET_TEST_DIR
+OUTPUT_DIR = plot_utils.get_output_dir(__file__)
 OUTPUT_DIR.mkdir(exist_ok=True)
 
-# Audio parameters
-SAMPLE_RATE = 22050
-DURATION = 4.0
+# Audio parameters from config
+SAMPLE_RATE = int(getattr(config, 'SAMPLE_RATE', 22050))
+DURATION = float(getattr(config, 'AUDIO_DURATION_S', 4.0))
 
 
 def load_models():

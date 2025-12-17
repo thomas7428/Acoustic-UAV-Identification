@@ -37,6 +37,10 @@ warnings.filterwarnings('ignore', message='n_fft=.*is too large for input signal
 # Import project config
 sys.path.insert(0, str(Path(__file__).parent.parent))
 import config
+from tools import plot_utils
+
+# Apply plotting style
+plot_utils.set_style()
 
 # Import ML libraries
 try:
@@ -51,17 +55,18 @@ sns.set_style("whitegrid")
 plt.rcParams['figure.figsize'] = (14, 8)
 plt.rcParams['font.size'] = 10
 
-# Audio processing parameters
-SAMPLE_RATE = 22050
-DURATION = 10
-SAMPLES_PER_TRACK = SAMPLE_RATE * DURATION
+# Audio processing parameters (use centralized config)
+SAMPLE_RATE = getattr(config, 'SAMPLE_RATE', 22050)
+DURATION = float(getattr(config, 'AUDIO_DURATION_S', 4.0))
+SAMPLES_PER_TRACK = int(SAMPLE_RATE * DURATION)
 
-# Paths
-AUGMENT_CONFIG_PATH = config.CONFIG_DATASET_PATH #Path(__file__).parent.parent / "0 - DADS dataset extraction" / "augment_config_v3.json"
-DATASET_COMBINED_PATH = config.DATASET_ROOT
-FEATURES_JSON_PATH = config.MEL_DATA_PATH  # Using MEL features for this analysis
-OUTPUT_DIR = Path(__file__).parent / "outputs"
-TEST_INDEX_PATH = config.EXTRACTED_FEATURES_DIR / "mel_test_index.json"
+# Paths (use canonical config locations)
+AUGMENT_CONFIG_PATH = config.CONFIG_DATASET_PATH
+DATASET_COMBINED_PATH = config.DATASET_COMBINED_DIR
+# Prefer the test MEL paths from config
+FEATURES_JSON_PATH = config.MEL_TEST_DATA_PATH
+OUTPUT_DIR = plot_utils.get_output_dir(__file__)
+TEST_INDEX_PATH = config.MEL_TEST_INDEX_PATH
 
 
 def load_augmentation_config():
@@ -370,9 +375,9 @@ def get_precomputed_features_for_file(file_path, precomputed_data, num_segments=
     Returns:
         Array of shape (44, 90) - SINGLE MEL spectrogram matching training
     """
-    n_mels = 44  # MATCH training (not 90!)
-    n_fft = 2048
-    hop_length = 512
+    n_mels = int(getattr(config, 'MEL_N_MELS', 44))
+    n_fft = int(getattr(config, 'MEL_N_FFT', 2048))
+    hop_length = int(getattr(config, 'MEL_HOP_LENGTH', 512))
     
     # ONLY use precomputed per-file MELs. Do NOT compute on-the-fly here.
     if not precomputed_data or 'test_index' not in precomputed_data:
@@ -393,8 +398,8 @@ def get_precomputed_features_for_file(file_path, precomputed_data, num_segments=
 
     mel_db = np.array(test_index['mel'][idx]).astype(float)
 
-    # Enforce exact trainer shape: (n_mels, 90)
-    expected_shape = (n_mels, 90)
+    # Enforce exact trainer shape using config.MEL_TIME_FRAMES
+    expected_shape = (n_mels, int(getattr(config, 'MEL_TIME_FRAMES', 90)))
     if mel_db.shape != expected_shape:
         raise RuntimeError(
             f"Precomputed MEL for '{fname}' has shape {mel_db.shape}; expected {expected_shape}.\n"

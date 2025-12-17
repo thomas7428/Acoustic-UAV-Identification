@@ -18,6 +18,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 from tqdm import tqdm
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent))
+import config
+from tools import plot_utils
+
+# plotting style
+plot_utils.set_style()
 
 # Project imports
 import sys
@@ -28,7 +35,7 @@ from tensorflow import keras
 from sklearn.metrics import precision_recall_curve, f1_score, precision_score, recall_score
 
 
-OUTPUT_DIR = Path(__file__).parent / 'outputs'
+OUTPUT_DIR = plot_utils.get_output_dir(__file__)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -145,7 +152,7 @@ def plot_diagnostics(model_name, y_true, y_scores, out_dir):
     plt.title(f'Precision-Recall: {model_name}')
     plt.grid(True)
     plt.tight_layout()
-    plt.savefig(out_dir / f'{model_name}_pr_curve.png', dpi=150)
+    plot_utils.save_figure(plt.gcf(), f'{model_name}_pr_curve.png', script_path=__file__)
     plt.close()
 
     # F1 vs threshold
@@ -158,7 +165,7 @@ def plot_diagnostics(model_name, y_true, y_scores, out_dir):
     plt.title(f'F1 vs Threshold: {model_name}')
     plt.grid(True)
     plt.tight_layout()
-    plt.savefig(out_dir / f'{model_name}_f1_vs_threshold.png', dpi=150)
+    plot_utils.save_figure(plt.gcf(), f'{model_name}_f1_vs_threshold.png', script_path=__file__)
     plt.close()
 
 

@@ -20,14 +20,13 @@ import librosa
 import librosa.display
 from collections import Counter
 
-# Import project config
+# Import project config + plot utils
 sys.path.insert(0, str(Path(__file__).parent.parent))
 import config
+from tools import plot_utils
 
-# Set style
-sns.set_style("whitegrid")
-plt.rcParams['figure.figsize'] = (12, 8)
-plt.rcParams['font.size'] = 10
+# Apply consistent plotting style
+plot_utils.set_style()
 
 
 def count_files_in_dataset(dataset_path):
@@ -50,12 +49,12 @@ def count_files_in_dataset(dataset_path):
 
 def plot_dataset_distribution():
     """Plot class distribution across different datasets."""
-    base_path = config.PROJECT_ROOT / "0 - DADS dataset extraction"
-    
+    base_path = config.EXTRACTION_DIR
+
     datasets = {
-        'Original': base_path / 'dataset_test',
-        'Augmented': base_path / 'dataset_augmented',
-        'Combined': base_path / 'dataset_combined'
+        'Original': config.DATASET_TEST_DIR,
+        'Augmented': config.DATASET_AUGMENTED_DIR,
+        'Combined': config.DATASET_COMBINED_DIR
     }
     
     data = []
@@ -122,18 +121,15 @@ def plot_dataset_distribution():
     
     plt.tight_layout()
     
-    # Save
-    output_dir = Path(__file__).parent / 'outputs'
-    output_dir.mkdir(exist_ok=True)
-    plt.savefig(output_dir / 'dataset_distribution.png', dpi=300, bbox_inches='tight')
-    print(f"[OK] Saved: {output_dir / 'dataset_distribution.png'}")
+    # Save via plot utils
+    plot_utils.save_figure(fig, 'dataset_distribution.png', script_path=__file__)
     
     return fig
 
 
 def plot_snr_distribution():
     """Plot SNR distribution from augmentation metadata."""
-    metadata_path = config.PROJECT_ROOT / "0 - DADS dataset extraction" / "dataset_augmented" / "augmentation_metadata.json"
+    metadata_path = config.DATASET_AUGMENTED_DIR / "augmentation_metadata.json"
     
     if not metadata_path.exists():
         print("[WARNING] Augmentation metadata not found")
@@ -194,19 +190,14 @@ def plot_snr_distribution():
     
     plt.tight_layout()
     
-    # Save
-    output_dir = Path(__file__).parent / 'outputs'
-    output_dir.mkdir(exist_ok=True)
-    plt.savefig(output_dir / 'snr_distribution.png', dpi=300, bbox_inches='tight')
-    print(f"[OK] Saved: {output_dir / 'snr_distribution.png'}")
+    plot_utils.save_figure(fig, 'snr_distribution.png', script_path=__file__)
     
     return fig
 
 
 def plot_audio_examples():
     """Plot waveform and spectrogram examples from each dataset."""
-    base_path = config.PROJECT_ROOT / "0 - DADS dataset extraction"
-    dataset_combined = base_path / 'dataset_combined'
+    dataset_combined = config.DATASET_COMBINED_DIR
     
     if not dataset_combined.exists():
         print("[WARNING] Combined dataset not found")
@@ -236,8 +227,9 @@ def plot_audio_examples():
         axes = axes.reshape(1, -1)
     
     for idx, (label, filepath) in enumerate(examples.items()):
-        # Load audio
-        y, sr = librosa.load(filepath, sr=22050, duration=3)  # Load 3 seconds
+        # Load audio using centralized sample rate and a short preview duration
+        preview_dur = min(3.0, float(getattr(config, 'AUDIO_DURATION_S', 3.0)))
+        y, sr = librosa.load(filepath, sr=config.SAMPLE_RATE, duration=preview_dur)
         
         # Waveform
         librosa.display.waveshow(y, sr=sr, ax=axes[idx, 0], color='steelblue')
@@ -256,18 +248,14 @@ def plot_audio_examples():
     
     plt.tight_layout()
     
-    # Save
-    output_dir = Path(__file__).parent / 'outputs'
-    output_dir.mkdir(exist_ok=True)
-    plt.savefig(output_dir / 'audio_examples.png', dpi=300, bbox_inches='tight')
-    print(f"[OK] Saved: {output_dir / 'audio_examples.png'}")
+    plot_utils.save_figure(fig, 'audio_examples.png', script_path=__file__)
     
     return fig
 
 
 def generate_summary_stats():
     """Generate and save summary statistics."""
-    base_path = config.PROJECT_ROOT / "0 - DADS dataset extraction"
+    base_path = config.EXTRACTION_DIR
     
     stats = {
         'datasets': {},
@@ -296,13 +284,11 @@ def generate_summary_stats():
         stats['augmentation'] = aug_data.get('statistics', {})
     
     # Save stats
-    output_dir = Path(__file__).parent / 'outputs'
-    output_dir.mkdir(exist_ok=True)
-    
-    stats_path = output_dir / 'dataset_statistics.json'
+    stats_output_dir = plot_utils.get_output_dir(__file__)
+    stats_path = stats_output_dir / 'dataset_statistics.json'
     with open(stats_path, 'w') as f:
         json.dump(stats, f, indent=2)
-    
+
     print(f"[OK] Saved: {stats_path}")
     
     # Print summary

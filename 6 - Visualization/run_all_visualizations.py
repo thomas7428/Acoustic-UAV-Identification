@@ -11,10 +11,14 @@ from pathlib import Path
 
 # Import visualization modules
 import argparse
+import sys
+from tools import plot_utils
 import dataset_analysis
 import model_performance
 import augmentation_impact
 import performance_by_distance
+
+plot_utils.set_style()
 
 
 def print_header(text):
@@ -57,7 +61,7 @@ def main():
         # Final summary
         print_header("VISUALIZATION SUITE COMPLETE")
         print("All visualizations have been generated successfully!")
-        print(f"\nCheck the outputs in: {Path(__file__).parent / 'outputs'}")
+        print(f"\nCheck the outputs in: {plot_utils.get_output_dir(__file__)}")
         print("\nGenerated files:")
         
         output_dir = Path(__file__).parent / 'outputs'
