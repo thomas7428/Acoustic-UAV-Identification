@@ -4,49 +4,255 @@ Ce dossier contient les scripts de visualisation et d'analyse pour le projet Aco
 
 ## Scripts disponibles
 
-### 1. `dataset_analysis.py`
-Analyse la composition et les caractéristiques du dataset.
+## 🎯 Scripts Modernes (Recommandés)
+
+### 🆕 1. `performance_comparison.py` ⭐ **PRINCIPAL**
+**Script de visualisation des performances utilisant les résultats JSON précalculés.**
+
+Visualisation complète à partir des fichiers générés par `Universal_Perf_Tester.py`.
+
+**Features :**
+- Chargement depuis `config.PERFORMANCE_DIR`
+- Comparaison multi-modèles, multi-splits, multi-thresholds
+- Métriques globales, par classe, et par sous-catégorie
+- Matrices de confusion, courbes par distance/type
+- Analyse de l'impact des thresholds
+- Rapports texte détaillés
+
+**Usage rapide :**
+```bash
+# Tous les résultats disponibles
+python performance_comparison.py --all
+
+# Presets rapides
+python quick_viz.py all                  # Tout visualiser
+python quick_viz.py compare-models       # Comparaison standard
+```
+
+**Avantages :**
+- ✅ Instantané (JSON précalculés)
+- ✅ Config centralisée
+- ✅ Filtres flexibles
+- ✅ Pas de fallback
+
+---
+
+### 2. `modern_dataset_analysis.py`
+**Analyse de la composition et statistiques du dataset.**
+
+Visualise la distribution des classes, sous-catégories et splits.
 
 **Génère :**
-- Distribution des classes (original, augmenté, combiné)
-- Distribution SNR des échantillons augmentés
-- Exemples de formes d'onde et spectrogrammes
-- Statistiques récapitulatives (JSON)
+- `dataset_split_distribution.png` - Distribution par split
+- `dataset_drone_distribution.png` - Drones par distance
+- `dataset_ambient_distribution.png` - Ambients par type
+- `dataset_summary.txt` - Rapport complet
 
 **Usage :**
 ```bash
-python dataset_analysis.py
+python modern_dataset_analysis.py
 ```
 
-### 2. `model_performance.py`
-Compare les performances des différents modèles (CNN, RNN, CRNN).
+---
+
+### 3. `modern_audio_examples.py`
+**Génère des exemples audio représentatifs avec visualisations.**
+
+Crée une page HTML interactive avec lecteurs audio, waveforms et spectrogrammes.
 
 **Génère :**
-- Courbes d'apprentissage (accuracy et loss)
+- Fichiers WAV copiés
+- Visualisations (waveform + spectrogramme)
+- Page HTML avec lecteurs audio
+- Dossier : `outputs/audio_examples/`
+
+**Usage :**
+```bash
+python modern_audio_examples.py
+# Ouvrir: outputs/audio_examples/index.html
+```
+
+---
+
+### 4. `modern_threshold_calibration.py`
+**Analyse systématique des thresholds de décision.**
+
+Recommande les thresholds optimaux par modèle pour différents critères (F1, accuracy, équilibrage FP/FN).
+
+**Génère :**
+- `threshold_calibration_{model}_{split}.png` - Courbes et recommandations
+- `threshold_recommendations.json` - Thresholds optimaux
+- `threshold_recommendations.txt` - Rapport lisible
+
+**Usage :**
+```bash
+python modern_threshold_calibration.py
+# Nécessite plusieurs thresholds testés avec Universal_Perf_Tester.py
+```
+
+---
+
+### 5. `run_all_visualizations.py`
+**Lance tous les scripts modernes en une seule commande.**
+
+**Usage :**
+```bash
+python run_all_visualizations.py                # Tout générer
+python run_all_visualizations.py --skip-audio   # Sans audio examples
+```
+
+---
+
+### 6. `quick_viz.py`
+**Launcher rapide avec presets pour performance_comparison.py.**
+
+**Presets disponibles :**
+- `all` - Tous les résultats
+- `compare-models` - Tous modèles sur test @ t=0.5
+- `threshold-analysis` - CNN avec thresholds multiples
+- `custom` - Arguments personnalisés
+
+**Usage :**
+```bash
+python quick_viz.py all
+python quick_viz.py compare-models
+python quick_viz.py custom --models CNN --splits test val
+```
+
+---
+
+## 📁 Organisation
+
+```
+6 - Visualization/
+├── performance_comparison.py      ⭐ Principal
+├── quick_viz.py                   🚀 Launcher
+├── modern_dataset_analysis.py     📊 Dataset
+├── modern_audio_examples.py       🎵 Audio
+├── modern_threshold_calibration.py 🎯 Thresholds
+├── run_all_visualizations.py      🔄 Tout exécuter
+├── README.md                      📖 Documentation
+├── WORKFLOW.md                    📋 Guide complet
+├── outputs/                       💾 Résultats
+│   ├── *.png
+│   ├── *.txt
+│   └── audio_examples/
+└── archives/                      🗄️ Scripts legacy
+    └── README.md
+
+```
+
+---
+
+## 📚 Scripts Legacy (Archives)
+
+Les anciens scripts ont été déplacés dans `archives/` :
+- `audio_examples.py`
+- `dataset_analysis.py`
+- `model_performance.py`
+- `threshold_calibration.py`
+- `performance_by_distance.py`
+- `augmentation_impact.py`
+
+**⚠️ Ces scripts sont obsolètes.** Utilisez les versions modernes ci-dessus.
+
+Voir `archives/README.md` pour plus de détails.
+
+---
+
+## 🚀 Workflow Rapide
+
+### Générer des résultats de performance
+
+```bash
+# 1. Tester un modèle (génère JSON)
+python "3 - Single Model Performance Calculation/Universal_Perf_Tester.py" \
+    --model CNN --split test --threshold 0.5
+
+# 2. Visualiser immédiatement
+cd "6 - Visualization"
+python quick_viz.py all
+```
+
+### Analyse complète
+
+```bash
+# Générer toutes les visualisations
+python run_all_visualizations.py
+
+# Résultats dans outputs/
+ls outputs/
+```
+
+### Comparaisons personnalisées
+
+```bash
+# Comparer CNN vs CRNN
+python performance_comparison.py --models CNN CRNN --splits test
+
+# Analyser l'impact du threshold
+python performance_comparison.py --models CNN --thresholds 0.4 0.5 0.6 0.7
+```
+
+---
+
+## 📖 Documentation Complète
+
+- **`README.md`** (ce fichier) - Vue d'ensemble et référence des scripts
+- **`WORKFLOW.md`** - Guide détaillé étape par étape avec cas d'usage
+- **`archives/README.md`** - Information sur les scripts legacy
+
+---
+
+## 💡 Tips
+
+1. **Utiliser les JSON précalculés** : Tous les scripts modernes lisent depuis `config.PERFORMANCE_DIR`, donc testez vos modèles une fois avec `Universal_Perf_Tester.py`, puis visualisez à volonté sans recalcul.
+
+2. **Presets rapides** : `quick_viz.py` offre des configurations prêtes à l'emploi pour les cas d'usage courants.
+
+3. **Filtrage intelligent** : `performance_comparison.py` peut combiner train/val/test ou comparer différents thresholds automatiquement.
+
+4. **Timestamps automatiques** : Les fichiers JSON incluent un timestamp, donc plusieurs tests du même modèle ne s'écrasent jamais.
+
+5. **run_all_visualizations** : Génère toutes les visualisations essentielles en une commande.
+
+---
+
+## 🔧 Dépannage
+
+**"No JSON files found"**
+- Lancer `Universal_Perf_Tester.py` d'abord pour générer les résultats
+
+**"No multi-threshold results"**
+- Pour l'analyse de thresholds, tester avec plusieurs valeurs (0.4, 0.5, 0.6, etc.)
+
+**Erreur d'import**
+- Vérifier que vous exécutez depuis le virtualenv : `.venv/bin/python`
+
+---
+
+## 📊 Outputs Générés
+
+Tous les résultats sont sauvegardés dans `outputs/` :
+
+**Visualisations PNG:**
+- Performance globale et par classe
 - Matrices de confusion
-- Comparaison des métriques (accuracy, precision, recall, F1)
-- Tableau récapitulatif des performances (CSV)
+- Courbes par distance/type
+- Impact des thresholds
 
-**Usage :**
-```bash
-python model_performance.py
-```
+**Rapports Texte:**
+- `performance_summary.txt` - Métriques détaillées
+- `dataset_summary.txt` - Stats du dataset
+- `threshold_recommendations.txt` - Thresholds optimaux
 
-### 3. `augmentation_impact.py`
-Analyse l'impact de l'augmentation des données sur les performances.
+**Données JSON:**
+- Résultats bruts pour post-traitement
 
-**Génère :**
-- Performance par catégorie SNR
-- Composition du dataset augmenté
-- Évolution du dataset (avant/après augmentation)
+**Pages HTML:**
+- `audio_examples/index.html` - Exemples audio interactifs
 
-**Usage :**
-```bash
-python augmentation_impact.py
-```
-
-### 4. `performance_by_distance.py`
-Analyse les performances en fonction de la distance simulée du drone (catégories SNR).
+---
 
 **Génère :**
 - Spectre de difficulté de détection (très loin → très proche)

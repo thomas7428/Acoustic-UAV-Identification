@@ -16,14 +16,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import config
 
 # Read and save parameters.
-DATASET_PATH = Path(config.PROJECT_ROOT / "0 - DADS dataset extraction" / "dataset_test")
 SAVED_MODEL_PATH = str(config.ATTENTION_CRNN_MODEL_PATH)  # Path of trained model
 SAMPLE_RATE = config.SAMPLE_RATE  # Sample rate in Hz.
 DURATION = config.DURATION  # Length of audio files fed. Measured in seconds. MUST MATCH TRAINING!
 SAMPLES_PER_TRACK = SAMPLE_RATE * DURATION
 
 # Precomputed MEL index path (optional)
-MEL_TEST_INDEX_PATH = Path(config.EXTRACTED_FEATURES_DIR) / "mel_test_index.json"
+MEL_TEST_INDEX_PATH = config.MEL_TEST_INDEX_PATH_STR  # Precomputed MEL index for test set
+MEL_TEST_DATA_PATH = config.MEL_TEST_DATA_PATH_STR  # Precomputed MEL features for test set
 
 # Predictions (1 or 0)
 JSON_PATH = str(config.ATTENTION_CRNN_PREDICTIONS_PATH)  # Attention CRNN predictions path

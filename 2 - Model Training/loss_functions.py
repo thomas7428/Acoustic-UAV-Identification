@@ -12,6 +12,25 @@ import tensorflow as tf
 from tensorflow import keras
 import numpy as np
 
+# Global dynamic positive-class weight. Trainers/callbacks can update this at
+# runtime via `set_dynamic_pos_weight()` to steer the loss toward higher
+# or lower emphasis on the positive (drone) class.
+# Default 1.0 means no re-weighting (positive weight == negative weight).
+DYNAMIC_POS_WEIGHT = 1.0
+
+def set_dynamic_pos_weight(value: float):
+    """Set the global dynamic positive-class weight used by weighted losses.
+
+    Args:
+        value: positive-class weight (float > 0). Typical values >1 increase
+               emphasis on positive (drone) class.
+    """
+    global DYNAMIC_POS_WEIGHT
+    try:
+        DYNAMIC_POS_WEIGHT = float(value)
+    except Exception:
+        DYNAMIC_POS_WEIGHT = 1.0
+
 
 def recall_focused_loss(fn_penalty=50.0):
     """
@@ -98,11 +117,31 @@ def focal_loss(alpha=0.75, gamma=2.0):
         # Calculate p_t (probability of true class)
         p_t = tf.reduce_sum(y_true * y_pred, axis=-1)
         
-        # Calculate focal loss
-        alpha_factor = alpha
+        # If a dynamic positive-class weight has been set at runtime, prefer
+        # using it to compute an effective alpha. The mapping used here is:
+        #   dynamic_alpha = w_pos / (1 + w_pos)
+        # where w_pos is the positive-class weight. This maps weight>1 to
+        # alpha in (0.5, 1.0).
+        try:
+            dyn_w = float(DYNAMIC_POS_WEIGHT)
+        except Exception:
+            dyn_w = 1.0
+
+        if dyn_w is not None and dyn_w != 1.0:
+            dynamic_alpha = dyn_w / (1.0 + dyn_w)
+            effective_alpha = dynamic_alpha
+        else:
+            effective_alpha = alpha
+
+        # Build per-sample alpha_t from one-hot y_true using effective alpha
+        alpha_tensor = y_true * effective_alpha + (1.0 - y_true) * (1.0 - effective_alpha)
+        # Reduce to scalar per-sample
+        alpha_factor = tf.reduce_sum(alpha_tensor, axis=-1)
+
+        # Modulating factor
         modulating_factor = tf.pow(1.0 - p_t, gamma)
         focal = alpha_factor * modulating_factor * bce
-        
+
         return tf.reduce_mean(focal)
     
     return loss_fn
@@ -123,16 +162,38 @@ def weighted_binary_crossentropy(class_weight_drone=3.0):
         Loss function compatible with Keras model.compile()
     """
     def loss_fn(y_true, y_pred):
-        # Calculate binary cross entropy
-        bce = keras.losses.binary_crossentropy(y_true, y_pred)
-        
-        # Apply class weights
-        # y_true = 1 (drone) gets weight class_weight_drone
-        # y_true = 0 (no-drone) gets weight 1.0
-        weights = y_true * class_weight_drone + (1 - y_true) * 1.0
-        
+        # Support both single-prob outputs and 2-class softmax outputs
+        # If y_pred has shape (batch, 2) assume softmax and extract positive class
+        if tf.rank(y_pred) == 2 and tf.shape(y_pred)[-1] == 2:
+            # Use probability of positive (drone) class
+            y_pred_pos = y_pred[:, 1]
+            # Convert y_true to scalar positive indicator if one-hot
+            if tf.rank(y_true) > 1 and tf.shape(y_true)[-1] == 2:
+                y_true_pos = y_true[:, 1]
+            else:
+                y_true_pos = tf.cast(tf.reshape(y_true, [-1]), tf.float32)
+        else:
+            # y_pred is scalar probability shape (batch,)
+            y_pred_pos = tf.reshape(y_pred, [-1])
+            y_true_pos = tf.cast(tf.reshape(y_true, [-1]), tf.float32)
+
+        # Binary cross entropy between scalar labels and positive-class prob
+        bce = keras.losses.binary_crossentropy(y_true_pos, y_pred_pos)
+
+        # Determine effective positive-class weight: prefer runtime-updated
+        # `DYNAMIC_POS_WEIGHT` if caller left class_weight_drone as None.
+        effective_pos_weight = class_weight_drone
+        try:
+            if class_weight_drone is None:
+                effective_pos_weight = float(DYNAMIC_POS_WEIGHT)
+        except Exception:
+            effective_pos_weight = 1.0
+
+        # Apply class weights: positive label gets effective_pos_weight, negative gets 1.0
+        weights = y_true_pos * effective_pos_weight + (1.0 - y_true_pos) * 1.0
+
         weighted_bce = weights * bce
-        
+
         return tf.reduce_mean(weighted_bce)
     
     return loss_fn
@@ -185,15 +246,66 @@ def get_metrics():
     Returns:
         List of metrics to pass to model.compile()
     """
+    # Wrap metrics so they operate on the positive-class probability when
+    # the model outputs a 2-class softmax (y_pred shape = [batch, 2]).
+    # This avoids shape mismatches between sparse/categorical labels and
+    # binary metrics (TP/FP/TN/FN, Precision, Recall, AUC) used for the
+    # drone-positive class.
+
+    class _PositiveClassMetric(keras.metrics.Metric):
+        """Wrapper metric that delegates to a binary metric but feeds it
+        the positive-class probability extracted from a 2-class softmax.
+        """
+        def __init__(self, metric_cls, name, **kwargs):
+            super().__init__(name=name)
+            # instantiate the underlying metric (Precision, Recall, etc.)
+            self._inner = metric_cls(name=name + "_inner", **kwargs)
+
+        def update_state(self, y_true, y_pred, sample_weight=None):
+            # Safely handle Tensor shapes inside graph mode using tf.cond
+            def _y_true_pos():
+                return y_true[:, 1]
+
+            def _y_true_scalar():
+                return tf.reshape(y_true, [-1])
+
+            rank_true = tf.rank(y_true)
+            shape_true = tf.shape(y_true)
+            is_one_hot = tf.logical_and(tf.equal(rank_true, 2), tf.equal(shape_true[-1], 2))
+            y_true_pos = tf.cond(is_one_hot, _y_true_pos, _y_true_scalar)
+
+            # extract positive-class probability from softmax outputs
+            def _y_pred_pos():
+                return y_pred[:, 1]
+
+            def _y_pred_scalar():
+                return tf.reshape(y_pred, [-1])
+
+            rank_pred = tf.rank(y_pred)
+            shape_pred = tf.shape(y_pred)
+            is_softmax2 = tf.logical_and(tf.equal(rank_pred, 2), tf.equal(shape_pred[-1], 2))
+            y_pred_pos = tf.cond(is_softmax2, _y_pred_pos, _y_pred_scalar)
+
+            # cast labels to appropriate dtype
+            y_true_pos = tf.cast(y_true_pos, tf.float32)
+
+            self._inner.update_state(y_true_pos, y_pred_pos, sample_weight)
+
+        def result(self):
+            return self._inner.result()
+
+        def reset_states(self):
+            self._inner.reset_states()
+
     return [
         'accuracy',
-        keras.metrics.Precision(name='precision'),
-        keras.metrics.Recall(name='recall'),
-        keras.metrics.AUC(name='auc'),
-        keras.metrics.TruePositives(name='tp'),
-        keras.metrics.FalsePositives(name='fp'),
-        keras.metrics.TrueNegatives(name='tn'),
-        keras.metrics.FalseNegatives(name='fn')
+        _PositiveClassMetric(keras.metrics.Precision, name='precision'),
+        _PositiveClassMetric(keras.metrics.Recall, name='recall'),
+        _PositiveClassMetric(keras.metrics.AUC, name='auc'),
+        _PositiveClassMetric(keras.metrics.TruePositives, name='tp'),
+        _PositiveClassMetric(keras.metrics.FalsePositives, name='fp'),
+        _PositiveClassMetric(keras.metrics.TrueNegatives, name='tn'),
+        _PositiveClassMetric(keras.metrics.FalseNegatives, name='fn')
     ]
 
 
@@ -276,6 +388,7 @@ def distance_weighted_loss(distance_weights=None, base_loss='bce', alpha=0.75, g
     if distance_weights is None:
         # Default weights: prioritize extreme distances
         distance_weights = {
+            700: 12.0,  # 12x weight for 700m (long-range)
             500: 10.0,  # 10x weight for 500m
             350: 8.0,   # 8x weight for 350m
             200: 5.0,   # 5x weight for 200m

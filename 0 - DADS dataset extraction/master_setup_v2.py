@@ -35,6 +35,9 @@ import librosa
 import soundfile as sf
 import numpy as np
 import random
+
+# Add project root to path to import config
+sys.path.insert(0, str(Path(__file__).parent.parent))
 import config
 try:
     from tools.audio_utils import ensure_duration
@@ -528,10 +531,10 @@ Examples:
     )
     
     # Dataset parameters
-    parser.add_argument('--drone-samples', type=int, default=400,
-                        help='Number of drone samples to download per class (default: 400)')
-    parser.add_argument('--no-drone-samples', type=int, default=400,
-                        help='Number of no-drone samples to download per class (default: 400)')
+    parser.add_argument('--drone-samples', type=int, default=1000,
+                        help='Number of drone samples to download per class (default: 1000)')
+    parser.add_argument('--no-drone-samples', type=int, default=1000,
+                        help='Number of no-drone samples to download per class (default: 1000)')
     
     # Split ratios
     parser.add_argument('--train', type=float, default=0.8,

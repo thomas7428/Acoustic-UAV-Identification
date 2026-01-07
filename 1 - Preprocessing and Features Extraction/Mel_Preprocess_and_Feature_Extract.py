@@ -177,8 +177,8 @@ if __name__ == "__main__":
     parser.add_argument('--spec_augment', choices=['auto','on','off'], default='auto',
                        help='Apply SpecAugment: auto=enable for train per config, on=force, off=disable')
     parser.add_argument('--split', choices=['train','val','test'], default='train')
-    parser.add_argument('--num_segments', type=int, default=10,
-                       help='Number of segments per audio file (default: 10)')
+    parser.add_argument('--num_segments', type=int, default=None,
+                       help='Number of segments per audio file (default: 1)')
     parser.add_argument('--write-npz', action='store_true', dest='write_npz', help='Also write compressed .npz index')
     args = parser.parse_args()
     
@@ -201,7 +201,7 @@ if __name__ == "__main__":
     n_mels = getattr(config, 'MEL_N_MELS', 90)
     n_fft = getattr(config, 'MEL_N_FFT', 2048)
     hop = getattr(config, 'MEL_HOP_LENGTH', 512)
-    segments = args.num_segments if args.num_segments is not None else getattr(config, 'NUM_SEGMENTS', 10)
+    segments = args.num_segments if args.num_segments is not None else getattr(config, 'NUM_SEGMENTS', 1)
 
     # Resolve dataset path supporting two common layouts:
     # 1) DATASET_ROOT/{train,val,test} (e.g. dataset_combined/train)
@@ -226,7 +226,7 @@ if __name__ == "__main__":
     print(f"Output: {out_path}")
     print(f"Sample Rate: {SAMPLE_RATE} Hz")
     print(f"Duration: {DURATION} seconds")
-    print(f"Segments: {args.num_segments}")
+    print(f"Segments: {segments}")
     print(f"SpecAugment: {'ENABLED (50% probability)' if apply_spec else 'DISABLED'}")
     print("="*60 + "\n")
 

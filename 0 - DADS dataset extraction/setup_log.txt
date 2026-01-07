@@ -1,18 +1,0 @@
-================================================================================
-DADS Dataset Extraction
-================================================================================
-Output directory: dataset_test
-Target sample rate: 22050 Hz
-Max per class: 400
-================================================================================
-
-Loading dataset from Hugging Face...
-✓ Dataset loaded: 180320 total samples
-
-Analyzing dataset distribution...
-✓ Class distribution:
-  - Label 0: 16,729 samples
-  - Label 1: 163,591 samples
-
-Processing audio files...
-Extracting:   0%|          | 0/180320 [00:00<?, ?file/s]

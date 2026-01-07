@@ -1,0 +1,406 @@
+#!/usr/bin/env python3
+"""
+Universal Performance Tester
+Charge un modèle, teste sur un dataset, affiche les résultats par catégorie détaillée:
+- Classe globale (0 = non-drone, 1 = drone)
+- Distance pour drones (500m, 600m, etc.)
+- Type d'ambient pour non-drones
+Avec métriques ML complètes (TP, TN, FP, FN, precision, recall, F1)
+Aucun fallback, aucun palliatif.
+"""
+import json
+import argparse
+from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent))
+import config
+
+import numpy as np
+import tensorflow as tf
+import os
+import multiprocessing
+import re
+from collections import defaultdict
+from datetime import datetime
+
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent))
+import config
+
+
+def calculate_metrics(tp, tn, fp, fn):
+    """Calcule les métriques ML à partir de la matrice de confusion."""
+    total = tp + tn + fp + fn
+    accuracy = (tp + tn) / total if total > 0 else 0
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+    f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+    specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
+    
+    return {
+        'tp': int(tp),
+        'tn': int(tn),
+        'fp': int(fp),
+        'fn': int(fn),
+        'total': int(total),
+        'accuracy': float(accuracy),
+        'precision': float(precision),
+        'recall': float(recall),
+        'f1_score': float(f1),
+        'specificity': float(specificity)
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Test un modèle sur un dataset avec métriques ML complètes')
+    parser.add_argument('--model', type=str, required=True, 
+                        choices=['CNN', 'RNN', 'CRNN', 'ATTENTION_CRNN'],
+                        help='Modèle à tester')
+    parser.add_argument('--split', type=str, required=True,
+                        choices=['train', 'val', 'test'],
+                        help='Dataset split à tester')
+    parser.add_argument('--threshold', type=float, default=None,
+                        help='Seuil de décision pour la classification (défaut: utilise config.MODEL_THRESHOLDS pour le modèle)')
+    parser.add_argument('--workers', type=int, default=None,
+                        help='Nombre de workers multiprocessing à utiliser (par défaut: cpu_count()-1)')
+    args = parser.parse_args()
+    
+    # 1. Charger le modèle
+    model_paths = {
+        'CNN': config.CNN_MODEL_PATH,
+        'RNN': config.RNN_MODEL_PATH,
+        'CRNN': config.CRNN_MODEL_PATH,
+        'ATTENTION_CRNN': config.ATTENTION_CRNN_MODEL_PATH
+    }
+    model_path = model_paths[args.model]
+    print(f"Chargement du modèle {args.model} depuis {model_path}")
+    model = tf.keras.models.load_model(str(model_path), compile=False)
+    
+    # 2. Charger les MEL features
+    mel_paths = {
+        'train': config.MEL_TRAIN_DATA_PATH,
+        'val': config.MEL_VAL_DATA_PATH,
+        'test': config.MEL_TEST_DATA_PATH
+    }
+    mel_path = mel_paths[args.split]
+    print(f"Chargement des features depuis {mel_path}")
+    
+    with open(mel_path, 'r') as f:
+        data = json.load(f)
+    
+    mels = data['mel']
+    labels = data.get('labels', [])
+    
+    if not labels or len(labels) != len(mels):
+        raise RuntimeError(f"Labels manquants ou incompatibles dans {mel_path}")
+    
+    # 3. Charger les fichiers du dataset pour connaître les catégories
+    dataset_dirs = {
+        'train': config.DATASET_TRAIN_DIR,
+        'val': config.DATASET_VAL_DIR,
+        'test': config.DATASET_TEST_DIR
+    }
+    dataset_dir = Path(dataset_dirs[args.split])
+    
+    class0_dir = dataset_dir / "0"
+    class1_dir = dataset_dir / "1"
+    
+    files0 = sorted([p.name for p in class0_dir.glob("*.wav")]) if class0_dir.exists() else []
+    files1 = sorted([p.name for p in class1_dir.glob("*.wav")]) if class1_dir.exists() else []
+    
+    # Tous les fichiers du dataset dans l'ordre (class0 puis class1)
+    all_files = files0 + files1
+    
+    print(f"\nDataset: {len(all_files)} fichiers")
+    print(f"  Catégorie 0: {len(files0)} fichiers")
+    print(f"  Catégorie 1: {len(files1)} fichiers")
+    print(f"Features: {len(mels)} MELs")
+    
+    # 4. Vérifier la cohérence
+    if len(all_files) != len(mels):
+        raise RuntimeError(f"Nombre de fichiers ({len(all_files)}) != nombre de MELs ({len(mels)})")
+    
+    # 5. Créer le mapping filename -> (mel, label) en supposant le même ordre
+    mel_map = {}
+    for i, filename in enumerate(all_files):
+        mel_map[filename] = (np.array(mels[i], dtype=np.float32), labels[i])
+    
+    # Catégories attendues
+    expected_categories = {fn: 0 for fn in files0}
+    expected_categories.update({fn: 1 for fn in files1})
+    
+    # 6. Fonction pour extraire sous-catégorie du nom de fichier
+    def extract_subcategory(filename, label):
+        """
+        Extrait la sous-catégorie d'un fichier:
+        - Pour drones (label 1): distance (500m, 600m, etc.) ou "orig_drone"
+        - Pour non-drones (label 0): type ambient ou "orig_ambient"
+        """
+        # Fichiers originaux DADS (dads_0_xxx ou dads_1_xxx)
+        if filename.startswith('dads_'):
+            if label == 1:
+                return 'orig_drone'
+            else:
+                return 'orig_ambient'
+        
+        # Fichiers originaux non-augmentés (orig_)
+        if filename.startswith('orig_'):
+            if label == 1:
+                return 'orig_drone'
+            else:
+                return 'orig_ambient'
+        
+        # Pattern: aug_[category]_[...]
+        match = re.match(r'aug_([^_]+(?:_[^_]+)?)_', filename)
+        if not match:
+            return 'unknown'
+        
+        category = match.group(1)
+        
+        if label == 1:  # Drone
+            # Extraire la distance (drone_500m, drone_600m, etc.)
+            dist_match = re.search(r'drone_(\d+)m', category)
+            if dist_match:
+                return f"{dist_match.group(1)}m"
+            return category
+        else:  # Non-drone
+            # Retourner le type d'ambient (cafe, traffic, etc.)
+            return category.replace('_', ' ')
+    
+    # 7. Tester chaque fichier
+    # Resolve threshold: use provided arg or fallback to calibrated thresholds in config
+    # Prefer normalized thresholds mapping in config if available
+    default_threshold = 0.5
+    try:
+        default_threshold = config.MODEL_THRESHOLDS_NORMALIZED.get(args.model.upper(), config.MODEL_THRESHOLDS.get(args.model, 0.5))
+    except Exception:
+        default_threshold = config.MODEL_THRESHOLDS.get(args.model, 0.5)
+    resolved_threshold = args.threshold if args.threshold is not None else default_threshold
+    worker_hint = args.workers if args.workers is not None else min(max(1, multiprocessing.cpu_count() - 1), 8)
+    print(f"\nTest en cours (threshold={resolved_threshold})... (workers={worker_hint})")
+    
+    # Résultats globaux avec matrice de confusion
+    # Pour classe 0 (non-drone): TN=correct 0, FP=prédit 1 alors que vrai 0
+    # Pour classe 1 (drone): TP=correct 1, FN=prédit 0 alors que vrai 1
+    global_confusion = {'tp': 0, 'tn': 0, 'fp': 0, 'fn': 0}
+    class0_confusion = {'tp': 0, 'tn': 0, 'fp': 0, 'fn': 0}
+    class1_confusion = {'tp': 0, 'tn': 0, 'fp': 0, 'fn': 0}
+    
+    # Résultats par sous-catégorie
+    subcategories = defaultdict(lambda: {
+        'tp': 0, 'tn': 0, 'fp': 0, 'fn': 0,
+        'label': None, 'predictions': []
+    })
+    
+    # Stocker toutes les prédictions pour analyse
+    all_predictions = []
+    
+    # Build arrays and run batched prediction (faster and avoids multiprocessing complexity)
+    filenames = []
+    X_list = []
+    labels_list = []
+    for filename, expected_cat in expected_categories.items():
+        if filename not in mel_map:
+            raise RuntimeError(f"Fichier {filename} manquant dans les features")
+        mel, true_label = mel_map[filename]
+        if true_label != expected_cat:
+            raise RuntimeError(f"Label incohérent pour {filename}: {true_label} vs {expected_cat}")
+        X = np.array(mel, dtype=np.float32)
+        # Ensure channel dimension
+        if X.ndim == 3:
+            X = X[..., np.newaxis]
+        filenames.append(filename)
+        X_list.append(X)
+        labels_list.append(int(true_label))
+
+    X_batch = np.stack(X_list, axis=0)
+
+    # Configure TF threading according to --workers (or default)
+    num_workers = args.workers if args.workers is not None else min(max(1, multiprocessing.cpu_count() - 1), 8)
+    try:
+        tf.config.threading.set_intra_op_parallelism_threads(num_workers)
+        tf.config.threading.set_inter_op_parallelism_threads(1)
+    except Exception:
+        pass
+
+    # Predict in batches
+    batch_size = 32
+    preds = model.predict(X_batch, batch_size=batch_size, verbose=1)
+
+    # Convert model outputs to probabilities for class 1
+    if preds.ndim > 1 and preds.shape[1] > 1:
+        probs = np.array(preds)[:, 1].astype(float)
+    else:
+        probs = np.array(preds).reshape(-1).astype(float)
+
+    for filename, true_label, prob in zip(filenames, labels_list, probs):
+        pred_class = 1 if prob > resolved_threshold else 0
+        prediction_record = {'filename': filename, 'true_label': int(true_label), 'pred_label': int(pred_class), 'prob_class1': float(prob), 'subcategory': extract_subcategory(filename, true_label)}
+        all_predictions.append(prediction_record)
+
+        # update counts
+        if true_label == 1 and pred_class == 1:
+            global_confusion['tp'] += 1
+        elif true_label == 0 and pred_class == 0:
+            global_confusion['tn'] += 1
+        elif true_label == 0 and pred_class == 1:
+            global_confusion['fp'] += 1
+        elif true_label == 1 and pred_class == 0:
+            global_confusion['fn'] += 1
+
+        if true_label == 0:
+            if pred_class == 0:
+                class0_confusion['tn'] += 1
+            else:
+                class0_confusion['fp'] += 1
+        else:
+            if pred_class == 1:
+                class1_confusion['tp'] += 1
+            else:
+                class1_confusion['fn'] += 1
+
+        subcat = extract_subcategory(filename, true_label)
+        subcategories[subcat]['label'] = true_label
+        subcategories[subcat]['predictions'].append(pred_class)
+        if true_label == 1 and pred_class == 1:
+            subcategories[subcat]['tp'] += 1
+        elif true_label == 0 and pred_class == 0:
+            subcategories[subcat]['tn'] += 1
+        elif true_label == 0 and pred_class == 1:
+            subcategories[subcat]['fp'] += 1
+        elif true_label == 1 and pred_class == 0:
+            subcategories[subcat]['fn'] += 1
+    
+    # 8. Calculer les métriques
+    global_metrics = calculate_metrics(
+        global_confusion['tp'], global_confusion['tn'],
+        global_confusion['fp'], global_confusion['fn']
+    )
+    
+    class0_metrics = calculate_metrics(
+        0, class0_confusion['tn'],  # Pour classe 0, on considère TN comme positifs
+        class0_confusion['fp'], 0
+    )
+    class0_metrics['total'] = class0_confusion['tn'] + class0_confusion['fp']
+    
+    class1_metrics = calculate_metrics(
+        class1_confusion['tp'], 0,  # Pour classe 1, on considère TP comme positifs
+        0, class1_confusion['fn']
+    )
+    class1_metrics['total'] = class1_confusion['tp'] + class1_confusion['fn']
+    
+    # Métriques par sous-catégorie
+    subcategory_metrics = {}
+    for subcat, data in subcategories.items():
+        subcategory_metrics[subcat] = calculate_metrics(
+            data['tp'], data['tn'], data['fp'], data['fn']
+        )
+        subcategory_metrics[subcat]['label'] = data['label']
+    
+    # 9. Afficher les résultats
+    print("\n" + "="*80)
+    print(f"RÉSULTATS - Modèle: {args.model} | Split: {args.split} | Threshold: {resolved_threshold}")
+    print("="*80)
+    
+    print(f"\n{'GLOBAL':^80}")
+    print("-" * 80)
+    print(f"  Accuracy: {global_metrics['accuracy']:.4f}")
+    print(f"  Precision: {global_metrics['precision']:.4f}")
+    print(f"  Recall: {global_metrics['recall']:.4f}")
+    print(f"  F1-Score: {global_metrics['f1_score']:.4f}")
+    print(f"  Matrice: TP={global_metrics['tp']}, TN={global_metrics['tn']}, "
+          f"FP={global_metrics['fp']}, FN={global_metrics['fn']}")
+    
+    print(f"\n{'CLASSE 0 (Non-Drones)':^80}")
+    print("-" * 80)
+    print(f"  Total: {class0_metrics['total']} échantillons")
+    print(f"  Accuracy: {class0_confusion['tn']}/{class0_metrics['total']} = "
+          f"{class0_confusion['tn']/class0_metrics['total']:.4f}")
+    print(f"  TN={class0_confusion['tn']}, FP={class0_confusion['fp']}")
+    print()
+    
+    # Sous-catégories classe 0
+    subcat0 = {k: v for k, v in subcategory_metrics.items() if v['label'] == 0}
+    if subcat0:
+        print("  Par type d'ambient:")
+        for subcat in sorted(subcat0.keys()):
+            m = subcat0[subcat]
+            print(f"    {subcat:20s}: Acc={m['accuracy']:.4f} "
+                  f"(TN={m['tn']}, FP={m['fp']}, Total={m['total']})")
+    
+    print(f"\n{'CLASSE 1 (Drones)':^80}")
+    print("-" * 80)
+    print(f"  Total: {class1_metrics['total']} échantillons")
+    print(f"  Accuracy: {class1_confusion['tp']}/{class1_metrics['total']} = "
+          f"{class1_confusion['tp']/class1_metrics['total']:.4f}")
+    print(f"  Precision: {global_metrics['precision']:.4f}")
+    print(f"  Recall: {global_metrics['recall']:.4f}")
+    print(f"  F1-Score: {global_metrics['f1_score']:.4f}")
+    print(f"  TP={class1_confusion['tp']}, FN={class1_confusion['fn']}")
+    print()
+    
+    # Sous-catégories classe 1 (triées par distance)
+    subcat1 = {k: v for k, v in subcategory_metrics.items() if v['label'] == 1}
+    if subcat1:
+        print("  Par distance:")
+        # Trier par distance numérique si possible
+        def sort_key(x):
+            match = re.search(r'(\d+)m', x)
+            if match:
+                return int(match.group(1))
+            return 999999 if 'orig' not in x else 0
+        
+        for subcat in sorted(subcat1.keys(), key=sort_key):
+            m = subcat1[subcat]
+            print(f"    {subcat:20s}: Acc={m['accuracy']:.4f} F1={m['f1_score']:.4f} "
+                  f"(TP={m['tp']}, FN={m['fn']}, Total={m['total']})")
+    
+    print("="*80)
+    
+    # 10. Sauvegarder les résultats
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    results_data = {
+        'metadata': {
+            'model': args.model,
+            'split': args.split,
+            'threshold': resolved_threshold,
+            'timestamp': timestamp,
+            'total_samples': len(expected_categories)
+        },
+        'global_metrics': global_metrics,
+        'class_metrics': {
+            'class_0': {
+                'total': class0_metrics['total'],
+                'tn': class0_confusion['tn'],
+                'fp': class0_confusion['fp'],
+                'accuracy': class0_confusion['tn'] / class0_metrics['total'] if class0_metrics['total'] > 0 else 0
+            },
+            'class_1': {
+                'total': class1_metrics['total'],
+                'tp': class1_confusion['tp'],
+                'fn': class1_confusion['fn'],
+                'accuracy': class1_confusion['tp'] / class1_metrics['total'] if class1_metrics['total'] > 0 else 0,
+                'precision': global_metrics['precision'],
+                'recall': global_metrics['recall'],
+                'f1_score': global_metrics['f1_score']
+            }
+        },
+        'subcategory_metrics': subcategory_metrics,
+        'predictions': all_predictions
+    }
+    
+    # Créer le nom de fichier (canonique — modèle + split uniquement)
+    output_filename = f"{args.model.lower()}_{args.split}.json"
+    output_path = config.PERFORMANCE_DIR / output_filename
+    
+    with open(output_path, 'w') as f:
+        json.dump(results_data, f, indent=2)
+    
+    print(f"\nRésultats sauvegardés: {output_path} (canonical filename, overwritten if exists)")
+    print(f"  - Métriques globales et par classe")
+    print(f"  - Métriques par sous-catégorie ({len(subcategory_metrics)} catégories)")
+    print(f"  - {len(all_predictions)} prédictions détaillées")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,41 +1,41 @@
 #!/bin/bash
 ################################################################################
-# Acoustic UAV Detection - Full Pipeline Automation Script
+# Acoustic UAV Detection - Complete Pipeline (v3.0)
 # 
-# This script orchestrates the complete ML pipeline:
-# 1. Dataset generation (optional)
-# 2. Parallel model training (CNN + RNN + CRNN)
-# 3. Performance calculations
-# 4. Visualizations generation
-# 5. Report generation
+# Pipeline modernisé reflétant la nouvelle architecture:
+# 1. Préparation du dataset (master_setup_v2.py)
+# 2. Extraction des features MEL (Mel_Preprocess_and_Feature_Extract.py)
+# 3. Entraînement des modèles (CNN, RNN, CRNN, ATTENTION_CRNN)
+# 4. Calcul des performances (Universal_Perf_Tester.py)
+# 5. Visualisations (run_all_visualizations.py)
 #
 # Usage:
 #   ./run_full_pipeline.sh [OPTIONS]
 #
 # Options:
-#   --config PATH         Path to augmentation config (default: augment_config_v2.json)
-#   --skip-dataset        Skip dataset generation (reuse existing, NO cleanup)
-#   --parallel            Train models in parallel (faster)
-#   --no-visualizations   Skip visualization generation
-#   --keep-logs           Keep existing logs (default: delete old logs)
+#   --skip-dataset        Skip dataset preparation (reuse existing)
+#   --skip-features       Skip feature extraction (reuse existing MEL files)
+#   --skip-training       Skip model training (reuse existing models)
+#   --skip-testing        Skip performance testing (reuse existing results)
+#   --models MODEL1,MODEL2  Train only specific models (CNN,RNN,CRNN,ATTENTION_CRNN)
+#   --parallel            Train models in parallel (faster but more CPU)
+#   --thresholds T1,T2    Test with multiple thresholds (e.g., 0.3,0.5,0.7)
+#   --use-class-aware-calibration  Run class-aware calibration between runs
+#   --skip-viz            Skip visualizations
+ #   --skip-pre-calib-eval Skip the baseline evaluation before calibration
+ #   --skip-calibration    Skip running the calibration step (requires existing calibration file)
+ #   --skip-post-calib-eval Skip the evaluation after calibration
 #   --help                Show this help message
 #
-# Important:
-#   By DEFAULT, the pipeline will:
-#   - CLEANUP existing datasets before generating new ones
-#   - DELETE old training logs and history CSVs
-#   Use --skip-dataset to keep existing data and --keep-logs to preserve logs.
-#
 # Examples:
-#   ./run_full_pipeline.sh --parallel                    # Full pipeline with cleanup
-#   ./run_full_pipeline.sh --skip-dataset --parallel     # Reuse existing (no cleanup)
-#   ./run_full_pipeline.sh --keep-logs --parallel        # Keep old logs
-#   ./run_full_pipeline.sh --config custom_config.json   # Custom config with cleanup
+#   ./run_full_pipeline.sh --parallel --thresholds 0.4,0.5,0.6
+#   ./run_full_pipeline.sh --skip-dataset --models CNN,CRNN
+#   ./run_full_pipeline.sh --skip-features --skip-viz
 ################################################################################
 
 set -e  # Exit on error
 
-# Colors for output
+# Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -45,27 +45,48 @@ CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # Default settings
-CONFIG_FILE="0 - DADS dataset extraction/augment_config_v3.json"
 SKIP_DATASET=false
 SKIP_FEATURES=false
+SKIP_TRAINING=false
+SKIP_TESTING=false
+MODELS="CNN,RNN,CRNN,ATTENTION_CRNN"
 PARALLEL=false
-SKIP_VISUALIZATIONS=false
-KEEP_LOGS=false
-FORCE_FEATURES=false
-FORCE_RETEST=false
+THRESHOLDS="0.5"
+SKIP_VIZ=false
+USE_CLASS_AWARE_CAL=false
+SKIP_PRE_CALIB_EVAL=false
+SKIP_CALIBRATION=false
+SKIP_POST_CALIB_EVAL=false
+TRAINER_FLAGS=""
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_PATH="$PROJECT_DIR/.venv/bin/python"
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 LOG_DIR="$PROJECT_DIR/logs"
 LOG_FILE="$LOG_DIR/pipeline_${TIMESTAMP}.log"
+# Determine default number of workers for evaluation (N-1 cores)
+CPU_COUNT=$(nproc 2>/dev/null || echo 1)
+DEFAULT_WORKERS=$(( CPU_COUNT > 1 ? CPU_COUNT - 1 : 1 ))
+# Cap to avoid oversubscription
+if [ $DEFAULT_WORKERS -gt 8 ]; then
+    DEFAULT_WORKERS=8
+fi
+WORKERS="$DEFAULT_WORKERS"
 
-# Parse command line arguments
+# Check for --no-nohup flag first (before parsing other args)
+USE_NOHUP=true
+for arg in "$@"; do
+    if [ "$arg" = "--no-nohup" ]; then
+        USE_NOHUP=false
+        break
+    fi
+done
+
+# Preserve the original arguments so we can re-launch with the same flags
+ORIGINAL_ARGS=("$@")
+
+# Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --config)
-            CONFIG_FILE="$2"
-            shift 2
-            ;;
         --skip-dataset)
             SKIP_DATASET=true
             shift
@@ -74,24 +95,52 @@ while [[ $# -gt 0 ]]; do
             SKIP_FEATURES=true
             shift
             ;;
-        --force-features)
-            FORCE_FEATURES=true
+        --skip-training)
+            SKIP_TRAINING=true
             shift
+            ;;
+        --skip-testing)
+            SKIP_TESTING=true
+            shift
+            ;;
+        --models)
+            MODELS="$2"
+            shift 2
             ;;
         --parallel)
             PARALLEL=true
             shift
             ;;
-        --no-visualizations)
-            SKIP_VISUALIZATIONS=true
+        --thresholds)
+            THRESHOLDS="$2"
+            shift 2
+            ;;
+        --skip-viz)
+            SKIP_VIZ=true
             shift
             ;;
-        --force-retest)
-            FORCE_RETEST=true
+        --skip-pre-calib-eval)
+            SKIP_PRE_CALIB_EVAL=true
             shift
             ;;
-        --keep-logs)
-            KEEP_LOGS=true
+        --skip-calibration)
+            SKIP_CALIBRATION=true
+            shift
+            ;;
+        --skip-post-calib-eval)
+            SKIP_POST_CALIB_EVAL=true
+            shift
+            ;;
+        --trainer-flags)
+            TRAINER_FLAGS="$2"
+            shift 2
+            ;;
+        --use-class-aware-calibration)
+            USE_CLASS_AWARE_CAL=true
+            shift
+            ;;
+        --no-nohup)
+            # Internal flag, already processed
             shift
             ;;
         --help)
@@ -105,24 +154,25 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Create log directory (and relaunch under nohup so the process survives SSH disconnects)
+# Create log directory
 mkdir -p "$LOG_DIR"
 
-# PID file for background runs
+# PID file for tracking
 PID_FILE="$PROJECT_DIR/run_pipeline.pid"
 
-# If not already launched under nohup, relaunch this script with nohup and exit the parent.
-# This ensures the process keeps running if the SSH session is closed.
-if [ -z "${NOHUP_LAUNCHED:-}" ]; then
-    echo "Re-launching script under nohup; log -> $LOG_FILE"
-    # Export a marker for the child and run under nohup, redirecting stdout/stderr to the chosen log file
-    NOHUP_LAUNCHED=1 nohup "$0" "$@" > "$LOG_FILE" 2>&1 &
+# Relaunch under nohup if not already
+if [ "$USE_NOHUP" = true ] && [ -z "${NOHUP_LAUNCHED:-}" ]; then
+    echo "Re-launching under nohup → log: $LOG_FILE"
+    # Use the preserved original args so flags like --skip-* are forwarded
+    # Use absolute path to this script to ensure nohup can execute it from any cwd
+    SCRIPT_ABS="$PROJECT_DIR/$(basename "$0")"
+    env NOHUP_LAUNCHED=1 nohup "$SCRIPT_ABS" "${ORIGINAL_ARGS[@]}" --no-nohup > "$LOG_FILE" 2>&1 &
     echo $! > "$PID_FILE"
-    echo "Started background process with PID $(cat $PID_FILE) (log: $LOG_FILE)"
+    echo "Started background process PID=$(cat $PID_FILE)"
     exit 0
 fi
 
-# Logging function (must be defined BEFORE first use)
+# Logging function
 log() {
     local level=$1
     shift
@@ -131,518 +181,447 @@ log() {
     
     case $level in
         INFO)
-            echo -e "${GREEN}[INFO]${NC} $message" | tee -a "$LOG_FILE"
+            echo -e "${GREEN}[$timestamp][INFO]${NC} $message"
             ;;
         WARN)
-            echo -e "${YELLOW}[WARN]${NC} $message" | tee -a "$LOG_FILE"
+            echo -e "${YELLOW}[$timestamp][WARN]${NC} $message"
             ;;
         ERROR)
-            echo -e "${RED}[ERROR]${NC} $message" | tee -a "$LOG_FILE"
+            echo -e "${RED}[$timestamp][ERROR]${NC} $message"
             ;;
         STEP)
-            echo -e "${CYAN}[STEP]${NC} $message" | tee -a "$LOG_FILE"
+            echo -e "${CYAN}[$timestamp][STEP]${NC} $message"
             ;;
         SUCCESS)
-            echo -e "${GREEN}[✓]${NC} $message" | tee -a "$LOG_FILE"
+            echo -e "${GREEN}[$timestamp][✓]${NC} $message"
             ;;
         *)
-            echo -e "$message" | tee -a "$LOG_FILE"
+            echo -e "[$timestamp] $message"
             ;;
     esac
 }
 
-# Cleanup old logs by default (unless --keep-logs specified)
-if [ "$KEEP_LOGS" = false ]; then
-    log INFO "Cleaning up old training logs and history files..."
-    
-    # Remove old training logs
-    rm -f "$LOG_DIR"/*_training_*.log 2>/dev/null || true
-    
-    # Remove old history CSVs from results directory
-    rm -f "$PROJECT_DIR/0 - DADS dataset extraction/results/"*_history.csv 2>/dev/null || true
-    
-    log SUCCESS "Old logs cleaned up"
-else
-    log INFO "Keeping existing logs (--keep-logs flag)"
-fi
-
 # Print header
 print_header() {
-    echo -e "${MAGENTA}" | tee -a "$LOG_FILE"
-    echo "================================================================================" | tee -a "$LOG_FILE"
-    echo "  🚀 ACOUSTIC UAV DETECTION - FULL PIPELINE" | tee -a "$LOG_FILE"
-    echo "================================================================================" | tee -a "$LOG_FILE"
-    echo -e "${NC}" | tee -a "$LOG_FILE"
+    echo -e "${MAGENTA}"
+    echo "================================================================================"
+    echo "  🚀 ACOUSTIC UAV DETECTION - FULL PIPELINE V3.0"
+    echo "================================================================================"
+    echo -e "${NC}"
     log INFO "Timestamp: $TIMESTAMP"
-    log INFO "Project Directory: $PROJECT_DIR"
     log INFO "Log File: $LOG_FILE"
-    log INFO "Config File: $CONFIG_FILE"
     log INFO "Skip Dataset: $SKIP_DATASET"
-    log INFO "Parallel Training: $PARALLEL"
-    log INFO "Keep Logs: $KEEP_LOGS"
-    log INFO ""
+    log INFO "Skip Features: $SKIP_FEATURES"
+    log INFO "Skip Training: $SKIP_TRAINING"
+    log INFO "Skip Testing: $SKIP_TESTING"
+    log INFO "Models: $MODELS"
+    log INFO "Parallel: $PARALLEL"
+    log INFO "Thresholds: $THRESHOLDS"
+    log INFO "Skip Viz: $SKIP_VIZ"
+    log INFO "Trainer Flags: $TRAINER_FLAGS"
+    echo ""
 }
 
 # Check prerequisites
 check_prerequisites() {
     log STEP "Checking prerequisites..."
     
-    # Check Python venv
     if [ ! -f "$VENV_PATH" ]; then
-        log ERROR "Python virtual environment not found at $VENV_PATH"
+        log ERROR "Python venv not found: $VENV_PATH"
         exit 1
     fi
-    log SUCCESS "Python venv found"
+    log SUCCESS "Python venv OK"
     
-    # Check config file
-    if [ ! -f "$PROJECT_DIR/$CONFIG_FILE" ]; then
-        log ERROR "Config file not found: $CONFIG_FILE"
-        exit 1
-    fi
-    log SUCCESS "Config file found"
+    # Verify critical scripts exist
+    local required_scripts=(
+        "0 - DADS dataset extraction/master_setup_v2.py"
+        "1 - Preprocessing and Features Extraction/Mel_Preprocess_and_Feature_Extract.py"
+        "2 - Model Training/CNN_Trainer.py"
+        "2 - Model Training/RNN_Trainer.py"
+        "2 - Model Training/CRNN_Trainer.py"
+        "2 - Model Training/Attention_CRNN_Trainer.py"
+        "3 - Single Model Performance Calculation/Universal_Perf_Tester.py"
+        "6 - Visualization/run_enhanced_visualizations.py"
+    )
     
-    # Check required directories
-    for dir in "0 - DADS dataset extraction" "1 - Preprocessing and Features Extraction" "2 - Model Training" "3 - Single Model Performance Calculation" "6 - Visualization"; do
-        if [ ! -d "$PROJECT_DIR/$dir" ]; then
-            log ERROR "Required directory not found: $dir"
+    for script in "${required_scripts[@]}"; do
+        if [ ! -f "$PROJECT_DIR/$script" ]; then
+            log ERROR "Missing critical script: $script"
             exit 1
         fi
     done
-    log SUCCESS "All directories present"
-    
-    log INFO ""
+    log SUCCESS "All scripts found"
 }
 
-# Step 1: Dataset Generation
-run_dataset_generation() {
+# Step 1: Dataset preparation
+prepare_dataset() {
     if [ "$SKIP_DATASET" = true ]; then
-        log STEP "Skipping dataset generation (--skip-dataset flag)"
-        log WARNING "Using existing datasets - no cleanup performed"
-        log INFO ""
+        log STEP "Skipping dataset preparation (--skip-dataset)"
         return
     fi
     
-    log STEP "STEP 1/5: Dataset Generation & Augmentation"
-    log INFO "Running master_setup_v2.py (with cleanup)..."
-    log INFO "This will DELETE existing datasets to prevent contamination"
-    log INFO "Config File: $CONFIG_FILE"
+    log STEP "STEP 1/5: Dataset Preparation"
+    log INFO "Running master_setup_v2.py..."
     
     cd "$PROJECT_DIR/0 - DADS dataset extraction"
     
-    # Extract just the filename from CONFIG_FILE path
-    CONFIG_BASENAME=$(basename "$CONFIG_FILE")
-    
-    # Run with cleanup by default (no --no-cleanup flag) and pass config
-    if "$VENV_PATH" master_setup_v2.py --config "$CONFIG_BASENAME" 2>&1 | tee -a "$LOG_FILE"; then
-        log SUCCESS "Dataset generation completed"
-    else
-        log ERROR "Dataset generation failed"
+    if ! "$VENV_PATH" master_setup_v2.py; then
+        log ERROR "Dataset preparation failed"
         exit 1
     fi
     
     cd "$PROJECT_DIR"
-    log INFO ""
+    log SUCCESS "Dataset prepared successfully"
 }
 
-# Step 1.5: Feature Extraction
-run_feature_extraction() {
-    log STEP "STEP 1.5/5: Feature Extraction"
-    
-    cd "$PROJECT_DIR/1 - Preprocessing and Features Extraction"
-    
-    log INFO "Extracting MEL features..."
-    if "$VENV_PATH" Mel_Preprocess_and_Feature_Extract.py --split train 2>&1 | tee -a "$LOG_FILE"; then
-        log SUCCESS "MEL feature extraction for training completed"
-    else
-        log ERROR "MEL feature extraction for training failed"
-        exit 1
-    fi
-    if "$VENV_PATH" Mel_Preprocess_and_Feature_Extract.py --split test 2>&1 | tee -a "$LOG_FILE"; then
-        log SUCCESS "MEL feature extraction for test completed"
-    else
-        log ERROR "MEL feature extraction for test failed"
-        exit 1
-    fi
-    if "$VENV_PATH" Mel_Preprocess_and_Feature_Extract.py --split val 2>&1 | tee -a "$LOG_FILE"; then
-        log SUCCESS "MEL feature extraction for validation completed"
-    else
-        log ERROR "MEL feature extraction for validation failed"
-        exit 1
-    fi
-    
-    log INFO "Extracting MFCC features..."
-    if "$VENV_PATH" MFCC_Preprocess_and_Feature_Extract.py --split train 2>&1 | tee -a "$LOG_FILE"; then
-        log SUCCESS "MFCC feature extraction for training completed"
-    else
-        log ERROR "MFCC feature extraction for training failed"
-        exit 1
-    fi
-    if "$VENV_PATH" MFCC_Preprocess_and_Feature_Extract.py --split test 2>&1 | tee -a "$LOG_FILE"; then
-        log SUCCESS "MFCC feature extraction for test completed"
-    else
-        log ERROR "MFCC feature extraction for test failed"
-        exit 1
-    fi
-    if "$VENV_PATH" MFCC_Preprocess_and_Feature_Extract.py --split val 2>&1 | tee -a "$LOG_FILE"; then
-        log SUCCESS "MFCC feature extraction for validation completed"
-    else
-        log ERROR "MFCC feature extraction for validation failed"
-        exit 1
-    fi
-    
-    cd "$PROJECT_DIR"
-    log INFO ""
-}
-
-# Step 2: Model Training
-run_model_training() {
-    log STEP "STEP 2/5: Model Training"
-    
-    cd "$PROJECT_DIR/2 - Model Training"
-    
-    if [ "$PARALLEL" = true ]; then
-        log INFO "Training models in PARALLEL mode (faster)..."
-        log INFO "Using staggered start to manage RAM usage..."
-        
-        # Start trainers with delays to avoid loading 6GB+ features simultaneously
-        log INFO "Starting CNN training (min_epochs=50, stratified validation)..."
-        "$VENV_PATH" CNN_Trainer.py --min_epochs 50 --stratified-validation > "$LOG_DIR/cnn_training_${TIMESTAMP}.log" 2>&1 &
-        CNN_PID=$!
-        
-        log INFO "Waiting 30s for CNN to load features into RAM..."
-        sleep 30
-        
-        log INFO "Starting RNN training (min_epochs=50, stratified validation)..."
-        "$VENV_PATH" RNN_Trainer.py --min_epochs 50 --stratified-validation > "$LOG_DIR/rnn_training_${TIMESTAMP}.log" 2>&1 &
-        RNN_PID=$!
-        
-        log INFO "Waiting 30s for RNN to load features into RAM..."
-        sleep 30
-        
-        log INFO "Starting CRNN training (min_epochs=50, stratified validation)..."
-        "$VENV_PATH" CRNN_Trainer.py --min_epochs 50 --stratified-validation > "$LOG_DIR/crnn_training_${TIMESTAMP}.log" 2>&1 &
-        CRNN_PID=$!
-        
-        log INFO "Waiting 30s for CRNN to load features into RAM..."
-        sleep 30
-        
-        log INFO "Starting Attention-Enhanced CRNN training (min_epochs=50, stratified validation)..."
-        "$VENV_PATH" Attention_CRNN_Trainer.py --min_epochs 50 --stratified-validation > "$LOG_DIR/attention_crnn_training_${TIMESTAMP}.log" 2>&1 &
-        ATTENTION_PID=$!
-        
-        # Wait for all to complete
-        log INFO "Waiting for all models to complete training..."
-        
-        wait $CNN_PID
-        CNN_STATUS=$?
-        if [ $CNN_STATUS -eq 0 ]; then
-            log SUCCESS "CNN training completed"
-        else
-            log ERROR "CNN training failed (exit code: $CNN_STATUS)"
-        fi
-        
-        wait $RNN_PID
-        RNN_STATUS=$?
-        if [ $RNN_STATUS -eq 0 ]; then
-            log SUCCESS "RNN training completed"
-        else
-            log ERROR "RNN training failed (exit code: $RNN_STATUS)"
-        fi
-        
-        wait $CRNN_PID
-        CRNN_STATUS=$?
-        if [ $CRNN_STATUS -eq 0 ]; then
-            log SUCCESS "CRNN training completed"
-        else
-            log ERROR "CRNN training failed (exit code: $CRNN_STATUS)"
-        fi
-        
-        wait $ATTENTION_PID
-        ATTENTION_STATUS=$?
-        if [ $ATTENTION_STATUS -eq 0 ]; then
-            log SUCCESS "Attention-Enhanced CRNN training completed"
-        else
-            log ERROR "Attention-Enhanced CRNN training failed (exit code: $ATTENTION_STATUS)"
-        fi
-        
-        # Check if any failed
-        if [ $CNN_STATUS -ne 0 ] || [ $RNN_STATUS -ne 0 ] || [ $CRNN_STATUS -ne 0 ] || [ $ATTENTION_STATUS -ne 0 ]; then
-            log ERROR "One or more models failed to train"
-            exit 1
-        fi
-        
-    else
-        log INFO "Training models in SEQUENTIAL mode..."
-        
-        log INFO "Training CNN (min_epochs=50, stratified validation)..."
-        if "$VENV_PATH" CNN_Trainer.py --min_epochs 50 --stratified-validation 2>&1 | tee -a "$LOG_FILE"; then
-            log SUCCESS "CNN training completed"
-        else
-            log ERROR "CNN training failed"
-            exit 1
-        fi
-        
-        log INFO "Training RNN (min_epochs=50, stratified validation)..."
-        if "$VENV_PATH" RNN_Trainer.py --min_epochs 50 --stratified-validation 2>&1 | tee -a "$LOG_FILE"; then
-            log SUCCESS "RNN training completed"
-        else
-            log ERROR "RNN training failed"
-            exit 1
-        fi
-        
-        log INFO "Training CRNN (min_epochs=50, stratified validation)..."
-        if "$VENV_PATH" CRNN_Trainer.py --min_epochs 50 --stratified-validation 2>&1 | tee -a "$LOG_FILE"; then
-            log SUCCESS "CRNN training completed"
-        else
-            log ERROR "CRNN training failed"
-            exit 1
-        fi
-        
-        log INFO "Training Attention-Enhanced CRNN (min_epochs=50, stratified validation)..."
-        if "$VENV_PATH" Attention_CRNN_Trainer.py --min_epochs 50 --stratified-validation 2>&1 | tee -a "$LOG_FILE"; then
-            log SUCCESS "Attention-Enhanced CRNN training completed"
-        else
-            log ERROR "Attention-Enhanced CRNN training failed"
-            exit 1
-        fi
-    fi
-    
-    cd "$PROJECT_DIR"
-    log INFO ""
-}
-
-# Step 3: Performance Calculations
-run_performance_calculations() {
-    log STEP "STEP 3/5: Performance Calculations"
-    
-    cd "$PROJECT_DIR/3 - Single Model Performance Calculation"
-    
-    log INFO "Calculating CNN performance..."
-    if "$VENV_PATH" CNN_Performance_Calcs.py 2>&1 | tee -a "$LOG_FILE"; then
-        log SUCCESS "CNN performance calculated"
-    else
-        log WARN "CNN performance calculation had warnings"
-    fi
-    
-    log INFO "Calculating RNN performance..."
-    if "$VENV_PATH" RNN_Performance_Calcs.py 2>&1 | tee -a "$LOG_FILE"; then
-        log SUCCESS "RNN performance calculated"
-    else
-        log WARN "RNN performance calculation had warnings"
-    fi
-    
-    log INFO "Calculating CRNN performance..."
-    if "$VENV_PATH" CRNN_Performance_Calcs.py 2>&1 | tee -a "$LOG_FILE"; then
-        log SUCCESS "CRNN performance calculated"
-    else
-        log WARN "CRNN performance calculation had warnings"
-    fi
-    
-    log INFO "Calculating Attention-Enhanced CRNN performance..."
-    if "$VENV_PATH" Attention_CRNN_Performance_Calcs.py 2>&1 | tee -a "$LOG_FILE"; then
-        log SUCCESS "Attention-Enhanced CRNN performance calculated"
-    else
-        log WARN "Attention-Enhanced CRNN performance calculation had warnings"
-    fi
-    
-    log INFO "Converting results for visualization..."
-    if "$VENV_PATH" convert_results_for_viz.py 2>&1 | tee -a "$LOG_FILE"; then
-        log SUCCESS "Results converted for visualization"
-    else
-        log WARN "Result conversion had warnings"
-    fi
-}
-
-# Step 4: Threshold Calibration (NEW - Always run unless skipped)
-run_threshold_calibration() {
-    log STEP "STEP 4/6: Threshold Calibration"
-    
-    cd "$PROJECT_DIR/6 - Visualization"
-    
-    log INFO "Calibrating optimal classification thresholds..."
-    if "$VENV_PATH" calibrate_thresholds.py --target-recall 0.85 --save 2>&1 | tee -a "$LOG_FILE"; then
-        log SUCCESS "Threshold calibration completed"
-        
-        # Display results if CSV exists
-        if [ -f "outputs/threshold_calibration_report.csv" ]; then
-            log INFO "Optimal thresholds:"
-            cat outputs/threshold_calibration_report.csv | column -t -s, | tee -a "$LOG_FILE"
-        fi
-    else
-        log WARN "Threshold calibration had issues (continuing pipeline)"
-    fi
-    
-    cd "$PROJECT_DIR"
-    log INFO ""
-}
-
-# Step 5: Visualizations
-run_visualizations() {
-    if [ "$SKIP_VISUALIZATIONS" = true ]; then
-        log STEP "Skipping visualizations (--no-visualizations flag)"
-        log INFO ""
+# Step 2: Feature extraction
+extract_features() {
+    if [ "$SKIP_FEATURES" = true ]; then
+        log STEP "Skipping feature extraction (--skip-features)"
         return
     fi
     
-    log STEP "STEP 5/6: Generating Visualizations"
+    log STEP "STEP 2/5: MEL Feature Extraction"
+    log INFO "Extracting features for train/val/test splits..."
     
-    cd "$PROJECT_DIR/6 - Visualization"
+    cd "$PROJECT_DIR/1 - Preprocessing and Features Extraction"
     
-    log INFO "Running all visualization scripts..."
-    VIS_CMD="$VENV_PATH run_all_visualizations.py"
-    if [ "$FORCE_RETEST" = true ]; then
-        VIS_CMD="$VIS_CMD --force-retest"
-    fi
+    for split in train val test; do
+        log INFO "Extracting MEL features for $split..."
+        if ! "$VENV_PATH" Mel_Preprocess_and_Feature_Extract.py --split "$split"; then
+            log ERROR "Feature extraction failed for $split"
+            exit 1
+        fi
+    done
+    
+    cd "$PROJECT_DIR"
+    log SUCCESS "All features extracted"
+}
 
-    if eval "$VIS_CMD" 2>&1 | tee -a "$LOG_FILE"; then
-        log SUCCESS "All visualizations generated"
+# Step 3: Model training
+train_models() {
+    if [ "$SKIP_TRAINING" = true ]; then
+        log STEP "Skipping model training (--skip-training)"
+        return
+    fi
+    
+    log STEP "STEP 3/5: Model Training"
+    
+    # Convert comma-separated list to array
+    IFS=',' read -ra MODEL_ARRAY <<< "$MODELS"
+    
+    if [ "$PARALLEL" = true ]; then
+        log INFO "Training models in PARALLEL: ${MODEL_ARRAY[*]}"
+        
+        local pids=()
+        for model in "${MODEL_ARRAY[@]}"; do
+            train_single_model "$model" &
+            pids+=($!)
+        done
+        
+        # Wait for all to complete
+        local failed=0
+        for i in "${!pids[@]}"; do
+            if ! wait "${pids[$i]}"; then
+                log ERROR "Model ${MODEL_ARRAY[$i]} training failed"
+                failed=1
+            fi
+        done
+        
+        if [ $failed -eq 1 ]; then
+            log ERROR "Some models failed to train"
+            exit 1
+        fi
     else
-        log WARN "Some visualizations may have failed"
+        log INFO "Training models SEQUENTIALLY: ${MODEL_ARRAY[*]}"
+        
+        for model in "${MODEL_ARRAY[@]}"; do
+            train_single_model "$model"
+        done
+    fi
+    
+    log SUCCESS "All models trained"
+}
+
+# Train a single model
+train_single_model() {
+    local model=$1
+    local model_lower=$(echo "$model" | tr '[:upper:]' '[:lower:]')
+    
+    log INFO "Training $model..."
+    
+    cd "$PROJECT_DIR/2 - Model Training"
+    
+    case $model in
+        CNN)
+            trainer="CNN_Trainer.py"
+            ;;
+        RNN)
+            trainer="RNN_Trainer.py"
+            ;;
+        CRNN)
+            trainer="CRNN_Trainer.py"
+            ;;
+        ATTENTION_CRNN)
+            trainer="Attention_CRNN_Trainer.py"
+            ;;
+        *)
+            log ERROR "Unknown model: $model"
+            return 1
+            ;;
+    esac
+    
+    # Forward any trainer-specific flags (e.g. --min_epochs, --max_epochs, --use_dynamic_weight, --dyn_min_w, --dyn_max_w, --batch_size)
+    if ! eval "\"$VENV_PATH\" \"$trainer\" $TRAINER_FLAGS"; then
+        log ERROR "$model training failed"
+        return 1
     fi
     
     cd "$PROJECT_DIR"
-    log INFO ""
+    log SUCCESS "$model trained successfully"
 }
 
-# Step 6: Generate Report
+# Step 4: Performance calculation with threshold optimization
+calculate_performance() {
+    if [ "$SKIP_TESTING" = true ]; then
+        log STEP "Skipping performance testing (--skip-testing)"
+        return
+    fi
+    
+    log STEP "STEP 4/5: Performance Calculation (with threshold optimization)"
+    
+    # Convert comma-separated list to array
+    IFS=',' read -ra MODEL_ARRAY <<< "$MODELS"
+    
+    local optimizer="$PROJECT_DIR/3 - Single Model Performance Calculation/optimize_threshold.py"
+    local tester="$PROJECT_DIR/3 - Single Model Performance Calculation/Universal_Perf_Tester.py"
+    
+    if [ ! -f "$optimizer" ] || [ ! -f "$tester" ]; then
+        log ERROR "Required scripts not found"
+        return 1
+    fi
+    
+    local failed_tests=0
+
+    if [ "$USE_CLASS_AWARE_CAL" = true ]; then
+        log STEP "Using class-aware calibration workflow"
+
+        # 1) Baseline run: generate predictions/scores with default threshold 0.5
+        CALIB_FILE="$PROJECT_DIR/0 - DADS dataset extraction/results/calibrated_thresholds.json"
+        if [ "$SKIP_PRE_CALIB_EVAL" = true ]; then
+            log STEP "Skipping pre-calibration baseline evaluation (--skip-pre-calib-eval)"
+        else
+            log INFO "[1/3] Baseline test run (threshold=0.5) for all models/splits"
+            # Remove any existing calibrated thresholds so Universal_Perf_Tester does not pick them up
+            if [ -f "$CALIB_FILE" ]; then
+                log INFO "Removing existing calibration file before baseline run: $CALIB_FILE"
+                rm -f "$CALIB_FILE"
+            fi
+            for model in "${MODEL_ARRAY[@]}"; do
+                for split in val test; do
+                    log INFO "  • Baseline: $model on $split"
+                    if ! "$VENV_PATH" "$tester" --model "$model" --split "$split" --threshold 0.5 --workers "$WORKERS" 2>&1 | grep -v "cuda\|CUDA\|GPU"; then
+                        log WARN "    ✗ Baseline test failed: $model $split"
+                        ((failed_tests++))
+                    fi
+                done
+            done
+        fi
+
+        # 2) Calibrate thresholds using class-aware calibration (saves visualizer JSON)
+        if [ "$SKIP_CALIBRATION" = true ]; then
+            log STEP "Skipping calibration step (--skip-calibration)"
+            if [ ! -f "$CALIB_FILE" ]; then
+                log ERROR "Calibration file not found: $CALIB_FILE (cannot skip calibration without existing file)"
+                exit 1
+            fi
+            log INFO "Using existing calibration file: $CALIB_FILE"
+        else
+            log INFO "[2/3] Running class-aware calibration (relaxed defaults)"
+            if ! "$VENV_PATH" "$PROJECT_DIR/calibrate_thresholds.py" --mode class_aware --min-prec-drone 0.7 --min-prec-ambient 0.85 --class-alpha 0.4 --max-class-acc-gap 0.2 --save 2>&1 | grep -v "cuda\|CUDA\|GPU"; then
+                log WARN "Calibration script reported warnings/errors"
+            else
+                log SUCCESS "Calibration completed and thresholds saved"
+            fi
+        fi
+
+        # 3) Re-run tests using calibrated thresholds (Universal_Perf_Tester defaults to config.MODEL_THRESHOLDS)
+        if [ "$SKIP_POST_CALIB_EVAL" = true ]; then
+            log STEP "Skipping post-calibration evaluation (--skip-post-calib-eval)"
+        else
+            log INFO "[3/3] Re-running tests with calibrated thresholds from config"
+            for model in "${MODEL_ARRAY[@]}"; do
+                for split in train val test; do
+                    log INFO "  • Calibrated test: $model on $split"
+                    if ! "$VENV_PATH" "$tester" --model "$model" --split "$split" --workers "$WORKERS" 2>&1 | grep -v "cuda\|CUDA\|GPU"; then
+                        log WARN "    ✗ Calibrated test failed: $model $split"
+                        ((failed_tests++))
+                    fi
+                done
+            done
+        fi
+
+        if [ $failed_tests -eq 0 ]; then
+            log SUCCESS "Class-aware calibration workflow completed successfully"
+        else
+            log WARN "Class-aware calibration workflow completed with $failed_tests issues"
+        fi
+        return
+    fi
+
+    # Default behaviour: per-model optimization then testing (legacy path)
+    for model in "${MODEL_ARRAY[@]}"; do
+        log INFO "Processing $model..."
+
+        # Step 4.1: Optimize threshold on validation set
+        log INFO "  → Optimizing threshold on validation set..."
+        if "$VENV_PATH" "$optimizer" --model "$model" --min 0.3 --max 0.7 --step 0.05 2>&1 | \
+            grep -E "(Optimisation|Threshold|MEILLEUR|sauvegardés)" | grep -v "cuda\|CUDA\|GPU"; then
+            
+            # Read optimized threshold
+            if [ -f /tmp/optimized_threshold.txt ]; then
+                optimal_threshold=$(cat /tmp/optimized_threshold.txt)
+                log SUCCESS "  ✓ Optimal threshold for $model: $optimal_threshold"
+            else
+                log WARN "  ✗ Could not read optimal threshold, using 0.5"
+                optimal_threshold=0.5
+            fi
+        else
+            log WARN "  ✗ Threshold optimization failed for $model, using 0.5"
+            optimal_threshold=0.5
+            ((failed_tests++))
+        fi
+        
+        # Step 4.2: Test with optimal threshold on all splits
+        log INFO "  → Testing with threshold=$optimal_threshold on all splits..."
+            for split in train val test; do
+            log INFO "    • Testing on $split..."
+            
+            if "$VENV_PATH" "$tester" \
+                --model "$model" \
+                --split "$split" \
+                --threshold "$optimal_threshold" \
+                --workers "$WORKERS" 2>&1 | \
+                grep -E "(Dataset|Test en cours|Accuracy|Résultats sauvegardés)" | \
+                grep -v "cuda\|CUDA\|GPU" > /dev/null; then
+                log SUCCESS "    ✓ $model $split (t=$optimal_threshold)"
+            else
+                log WARN "    ✗ Test failed: $model $split"
+                ((failed_tests++))
+            fi
+        done
+        
+        echo ""
+    done
+
+    if [ $failed_tests -eq 0 ]; then
+        log SUCCESS "All performance tests completed successfully"
+    else
+        log WARN "Performance calculation completed with $failed_tests issues"
+    fi
+}
+
+# Step 5: Visualizations (Enhanced Pipeline)
+generate_visualizations() {
+    if [ "$SKIP_VIZ" = true ]; then
+        log STEP "Skipping visualizations (--skip-viz)"
+        return
+    fi
+    
+    log STEP "STEP 5/5: Generating Enhanced Visualizations"
+    
+    local viz_script="$PROJECT_DIR/6 - Visualization/run_enhanced_visualizations.py"
+    
+    if [ ! -f "$viz_script" ]; then
+        log WARN "run_enhanced_visualizations.py not found, falling back to run_all_visualizations.py"
+        viz_script="$PROJECT_DIR/6 - Visualization/run_all_visualizations.py"
+        
+        if [ ! -f "$viz_script" ]; then
+            log ERROR "No visualization script found"
+            return 1
+        fi
+    fi
+    
+    log INFO "Running enhanced visualization pipeline (best thresholds only)..."
+    
+    if ! "$VENV_PATH" "$viz_script" 2>&1 | grep -v "cuda\|CUDA\|GPU"; then
+        log WARN "Visualization generation had warnings (non-fatal)"
+    else
+        log SUCCESS "Enhanced visualizations generated successfully"
+    fi
+}
+
+# Generate final report
 generate_report() {
-    log STEP "STEP 6/6: Generating HTML Report"
+    log STEP "Generating Pipeline Report..."
     
-    REPORT_FILE="$LOG_DIR/report_${TIMESTAMP}.html"
+    local report_file="$LOG_DIR/pipeline_report_${TIMESTAMP}.txt"
     
-    cat > "$REPORT_FILE" << EOF
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Pipeline Report - $TIMESTAMP</title>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
-        .container { max-width: 1200px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        h1 { color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }
-        h2 { color: #34495e; margin-top: 30px; }
-        .success { color: #27ae60; font-weight: bold; }
-        .error { color: #e74c3c; font-weight: bold; }
-        .info { color: #3498db; }
-        .log-section { background: #ecf0f1; padding: 15px; border-radius: 5px; margin: 10px 0; font-family: monospace; font-size: 12px; overflow-x: auto; }
-        table { width: 100%; border-collapse: collapse; margin: 20px 0; }
-        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
-        th { background-color: #3498db; color: white; }
-        tr:hover { background-color: #f5f5f5; }
-        .metric { display: inline-block; margin: 10px 20px 10px 0; padding: 15px; background: #ecf0f1; border-radius: 5px; }
-        .metric-value { font-size: 24px; font-weight: bold; color: #2c3e50; }
-        .metric-label { font-size: 12px; color: #7f8c8d; text-transform: uppercase; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>🚀 Acoustic UAV Detection Pipeline Report</h1>
-        
-        <div class="metric">
-            <div class="metric-label">Timestamp</div>
-            <div class="metric-value">$TIMESTAMP</div>
-        </div>
-        
-        <div class="metric">
-            <div class="metric-label">Config</div>
-            <div class="metric-value">$(basename "$CONFIG_FILE")</div>
-        </div>
-        
-        <div class="metric">
-            <div class="metric-label">Mode</div>
-            <div class="metric-value">$([ "$PARALLEL" = true ] && echo "PARALLEL" || echo "SEQUENTIAL")</div>
-        </div>
-        
-        <h2>📊 Pipeline Steps</h2>
-        <table>
-            <tr><th>Step</th><th>Description</th><th>Status</th></tr>
-            <tr><td>1</td><td>Dataset Generation</td><td class="$([ "$SKIP_DATASET" = true ] && echo "info" || echo "success")">$([ "$SKIP_DATASET" = true ] && echo "SKIPPED" || echo "✓ COMPLETED")</td></tr>
-            <tr><td>2</td><td>Model Training (CNN, RNN, CRNN, Attention-CRNN)</td><td class="success">✓ COMPLETED</td></tr>
-            <tr><td>3</td><td>Performance Calculations</td><td class="success">✓ COMPLETED</td></tr>
-            <tr><td>4</td><td>Threshold Calibration</td><td class="success">✓ COMPLETED</td></tr>
-            <tr><td>5</td><td>Visualizations</td><td class="$([ "$SKIP_VISUALIZATIONS" = true ] && echo "info" || echo "success")">$([ "$SKIP_VISUALIZATIONS" = true ] && echo "SKIPPED" || echo "✓ COMPLETED")</td></tr>
-            <tr><td>6</td><td>Report Generation</td><td class="success">✓ COMPLETED</td></tr>
-        </table>
-        
-        <h2>📁 Output Locations</h2>
-        <ul>
-            <li><strong>Models:</strong> <code>0 - DADS dataset extraction/saved_models/</code></li>
-            <li><strong>Results:</strong> <code>0 - DADS dataset extraction/results/</code></li>
-            <li><strong>Visualizations:</strong> <code>6 - Visualization/outputs/</code></li>
-            <li><strong>Logs:</strong> <code>logs/</code></li>
-        </ul>
-        
-        <h2>📝 Full Log</h2>
-        <div class="log-section">
-            <pre>$(cat "$LOG_FILE" | sed 's/\x1b\[[0-9;]*m//g')</pre>
-        </div>
-        
-        <h2>🔗 Quick Links</h2>
-        <ul>
-            <li><a href="../6 - Visualization/outputs/real_performance_by_distance.png" target="_blank">Performance by Distance</a></li>
-            <li><a href="../6 - Visualization/outputs/difficulty_spectrum.png" target="_blank">Difficulty Spectrum</a></li>
-            <li><a href="../6 - Visualization/outputs/performance_by_distance.csv" target="_blank">Performance CSV</a></li>
-        </ul>
-        
-        <p style="margin-top: 40px; text-align: center; color: #7f8c8d;">
-            Generated by run_full_pipeline.sh on $(date)
-        </p>
-    </div>
-</body>
-</html>
-EOF
+    {
+        echo "================================================================================"
+        echo "  ACOUSTIC UAV DETECTION - PIPELINE EXECUTION REPORT"
+        echo "================================================================================"
+        echo ""
+        echo "Execution Details:"
+        echo "  Timestamp: $TIMESTAMP"
+        echo "  Duration: $(date -ud "@$(($(date +%s) - $(date -d "$(echo $TIMESTAMP | sed 's/_/ /;s/\(..\)\(..\)\(..\)$/\1:\2:\3/')" +%s)))" +%H:%M:%S)"
+        echo "  Log File: $LOG_FILE"
+        echo ""
+        echo "Configuration:"
+        echo "  Dataset Prepared: $([ "$SKIP_DATASET" = false ] && echo "Yes" || echo "No (skipped)")"
+        echo "  Features Extracted: $([ "$SKIP_FEATURES" = false ] && echo "Yes" || echo "No (skipped)")"
+        echo "  Models Trained: $MODELS"
+        echo "  Training Mode: $([ "$PARALLEL" = true ] && echo "Parallel" || echo "Sequential")"
+        echo "  Thresholds Tested: $THRESHOLDS"
+        echo "  Visualizations: $([ "$SKIP_VIZ" = false ] && echo "Generated" || echo "Skipped")"
+        echo ""
+        echo "Output Locations:"
+        echo "  Models: 0 - DADS dataset extraction/saved_models/"
+        echo "  Performance: 0 - DADS dataset extraction/results/performance/"
+        echo "  Visualizations: 6 - Visualization/outputs/"
+        echo "  Training History: 0 - DADS dataset extraction/results/*_history.csv"
+        echo ""
+        echo "Next Steps:"
+        echo "  1. Review performance results: 6 - Visualization/outputs/performance_summary.txt"
+        echo "  2. Check visualizations: 6 - Visualization/outputs/"
+        echo "  3. Analyze threshold impact: 6 - Visualization/outputs/threshold_calibration_*.png"
+        echo "  4. Use quick_viz.py for custom visualizations"
+        echo ""
+    } > "$report_file"
     
-    log SUCCESS "HTML report generated: $REPORT_FILE"
-    log INFO ""
+    cat "$report_file"
+    log SUCCESS "Report saved: $report_file"
 }
 
 # Main execution
 main() {
+    local start_time=$(date +%s)
+    
     print_header
     check_prerequisites
     
-    START_TIME=$(date +%s)
+    prepare_dataset
+    extract_features
+    train_models
+    calculate_performance
+    generate_visualizations
     
-    if [ "$SKIP_DATASET" = false ]; then
-        run_dataset_generation
-    fi
+    local end_time=$(date +%s)
+    local duration=$((end_time - start_time))
     
-    # Feature extraction: skip if precomputed features exist unless forced
-    if [ "$SKIP_FEATURES" = false ]; then
-        FEATURES_DIR="$PROJECT_DIR/0 - DADS dataset extraction/extracted_features"
-        if [ "$FORCE_FEATURES" = false ] && [ -d "$FEATURES_DIR" ] && ls "$FEATURES_DIR"/*.json >/dev/null 2>&1; then
-            log INFO "Precomputed features detected in $FEATURES_DIR - skipping feature extraction (use --force-features to re-run)"
-        else
-            run_feature_extraction
-        fi
-    else
-        log INFO "Skipping feature extraction (--skip-features flag)"
-    fi
+    echo ""
+    echo -e "${MAGENTA}"
+    echo "================================================================================"
+    echo "  ✓ PIPELINE COMPLETED SUCCESSFULLY"
+    echo "================================================================================"
+    echo -e "${NC}"
+    log SUCCESS "Total duration: $(date -ud "@$duration" +%H:%M:%S)"
     
-    run_model_training
-    run_performance_calculations
-    run_threshold_calibration
-    run_visualizations
     generate_report
     
-    END_TIME=$(date +%s)
-    DURATION=$((END_TIME - START_TIME))
-    DURATION_MIN=$((DURATION / 60))
-    DURATION_SEC=$((DURATION % 60))
-    
-    echo -e "${GREEN}" | tee -a "$LOG_FILE"
-    echo "================================================================================" | tee -a "$LOG_FILE"
-    echo "  ✓ PIPELINE COMPLETED SUCCESSFULLY!" | tee -a "$LOG_FILE"
-    echo "================================================================================" | tee -a "$LOG_FILE"
-    echo -e "${NC}" | tee -a "$LOG_FILE"
-    log INFO "Total Duration: ${DURATION_MIN}m ${DURATION_SEC}s"
-    log INFO "Log File: $LOG_FILE"
-    log INFO "Report: $LOG_DIR/report_${TIMESTAMP}.html"
-    log INFO ""
-    log INFO "Next steps:"
-    log INFO "  1. Review report: firefox $LOG_DIR/report_${TIMESTAMP}.html"
-    log INFO "  2. Check visualizations: ls -lh '6 - Visualization/outputs/'"
-    log INFO "  3. Analyze performance: cat '6 - Visualization/outputs/performance_by_distance.csv'"
+    # Cleanup PID file
+    rm -f "$PID_FILE"
 }
 
-# Run main function
-main
+# Run main
+main "$@"

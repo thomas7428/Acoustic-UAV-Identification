@@ -34,6 +34,7 @@ import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers, models
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
+from sklearn.utils.class_weight import compute_class_weight
 
 # Use centralized configuration
 DATASET_DIR = Path(config.PROJECT_ROOT) / "0 - DADS dataset extraction"
@@ -43,7 +44,7 @@ MODEL_SAVE = Path(config.ATTENTION_CRNN_MODEL_PATH)
 HISTORY_SAVE = Path(config.ATTENTION_CRNN_HISTORY_PATH)
 
 # Training parameters (respect config when present)
-BATCH_SIZE = getattr(config, 'BATCH_SIZE', 16)
+BATCH_SIZE = getattr(config, 'BATCH_SIZE', 8)
 LEARNING_RATE = getattr(config, 'LEARNING_RATE', 0.0001)
 
 SAMPLE_RATE = config.SAMPLE_RATE
@@ -219,18 +220,65 @@ def build_attention_crnn(input_shape=(44, 90), num_classes=2):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Train Attention-Enhanced CRNN')
+    parser = argparse.ArgumentParser(description='Train Attention-Enhanced CRNN with configurable loss function')
+    parser.add_argument('--loss', type=str, default='focal', choices=['bce', 'weighted_bce', 'focal'],
+                       help='Loss function: bce, weighted_bce, or focal (default: focal)')
+    parser.add_argument('--class_weight', type=float, default=3.0,
+                       help='Class weight for drone class (for weighted_bce, default: 3.0)')
+    parser.add_argument('--focal_alpha', type=float, default=0.60,
+                       help='Focal loss alpha parameter (default: 0.60 - balanced)')
+    parser.add_argument('--focal_gamma', type=float, default=2.0,
+                       help='Focal loss gamma parameter (default: 2.0 - focus on hard examples)')
     parser.add_argument('--min_epochs', type=int, default=50, help='Minimum epochs before early stopping')
     parser.add_argument('--stratified-validation', action='store_true', help='Enable distance-stratified validation')
+    parser.add_argument('--use_class_weight', action='store_true', help='Compute class weights and apply sample_weight to fit')
+    parser.add_argument('--max_epochs', type=int, default=1000, help='Maximum number of epochs to run (default: 1000)')
+    parser.add_argument('--use_dynamic_weight', action='store_true', help='Enable dynamic positive-class weight scheduler (updates each epoch)')
+    parser.add_argument('--dyn_base', type=float, default=1.0, help='Base weight multiplier for dynamic scheduler')
+    parser.add_argument('--dyn_beta', type=float, default=0.8, help='EMA beta for dynamic scheduler (smoothing)')
+    parser.add_argument('--dyn_min_w', type=float, default=0.5, help='Minimum clamp for dynamic positive weight')
+    parser.add_argument('--dyn_max_w', type=float, default=8.0, help='Maximum clamp for dynamic positive weight')
+    parser.add_argument('--batch_size', type=int, default=BATCH_SIZE, help='Override batch size for training')
     args = parser.parse_args()
     
     print(colored("\n" + "="*70, "magenta"))
     print(colored("  ATTENTION-ENHANCED CRNN TRAINING", "magenta"))
     print(colored("="*70, "magenta"))
+    print(colored(f"\n[CONFIG] Loss function: {args.loss}", "yellow"))
+    if args.loss == 'weighted_bce':
+        print(colored(f"[CONFIG] Drone class weight: {args.class_weight}", "yellow"))
+    elif args.loss == 'focal':
+        print(colored(f"[CONFIG] Focal alpha: {args.focal_alpha}, gamma: {args.focal_gamma}", "yellow"))
     print(colored(f"[CONFIG] Min epochs: {args.min_epochs}", "yellow"))
     print(colored(f"[CONFIG] Stratified validation: {args.stratified_validation}", "yellow"))
+    print()
+    
     # Load datasets
     X_train, y_train, X_val, y_val = prepare_datasets()
+
+    # Apply config defaults when CLI args are not specified
+    try:
+        args.focal_alpha = args.focal_alpha if args.focal_alpha is not None else config.LOSS_DEFAULTS.get('focal_alpha', 0.75)
+        args.focal_gamma = args.focal_gamma if args.focal_gamma is not None else config.LOSS_DEFAULTS.get('focal_gamma', 2.0)
+        args.class_weight = args.class_weight if args.class_weight is not None else config.LOSS_DEFAULTS.get('class_weight_drone', 3.0)
+        if not hasattr(args, 'use_dynamic_weight'):
+            args.use_dynamic_weight = config.LOSS_DEFAULTS.get('use_dynamic_weight', True)
+    except Exception:
+        pass
+
+    # Optionally compute class weights and sample weights (Attention trainer uses one-hot labels)
+    sample_weight = None
+    if args.use_class_weight:
+        try:
+            y_train_int = y_train.astype(int)
+            classes = np.unique(y_train_int)
+            cw = compute_class_weight('balanced', classes=classes, y=y_train_int)
+            class_weight_map = {int(c): float(w) for c, w in zip(classes, cw)}
+            # Build sample_weight array matching original training labels
+            sample_weight = np.array([class_weight_map[int(lbl)] for lbl in y_train_int])
+            print(colored(f"[CONFIG] Using class_weight map: {class_weight_map}", "cyan"))
+        except Exception as e:
+            print(colored(f"[WARN] Could not compute class_weight/sample_weight: {e}", "yellow"))
 
     # Add channel dimension for Conv2D if necessary
     if X_train.ndim == 3:
@@ -241,23 +289,34 @@ def main():
     # Build model using the actual training shape (like CNN_Trainer does)
     if X_train.ndim != 4:
         raise ValueError(f"X_train must be 4D after adding channel dim, got {X_train.shape}")
-    n_mels_actual = X_train.shape[1]
-    train_tf = X_train.shape[2]
 
     # Convert labels to categorical
-    y_train = keras.utils.to_categorical(y_train.astype(int), num_classes=2)
-    y_val = keras.utils.to_categorical(y_val.astype(int), num_classes=2)
+    y_train_int = y_train.astype(int)
+    y_val_int = y_val.astype(int)
+    y_train = keras.utils.to_categorical(y_train_int, num_classes=2)
+    y_val = keras.utils.to_categorical(y_val_int, num_classes=2)
 
     # Build model
     print(colored("\n[INFO] Building Attention-Enhanced CRNN...", "cyan"))
-    model = build_attention_crnn(input_shape=(n_mels_actual, train_tf))
+    model = build_attention_crnn(input_shape=X_train.shape[1:3])
     
-    # Compile with recall-focused loss (heavily penalizes missing drones)
+    # Get loss function based on arguments
     from loss_functions import get_loss_function
     
+    if args.loss == 'focal':
+        loss_fn = get_loss_function('focal', alpha=args.focal_alpha, gamma=args.focal_gamma)
+    elif args.loss == 'weighted_bce':
+        loss_fn = get_loss_function('weighted_bce', class_weight_drone=args.class_weight)
+    elif args.loss == 'recall_focused':
+        loss_fn = get_loss_function('recall_focused', fn_penalty=50.0)
+        print("[INFO] Using RECALL-FOCUSED LOSS (FN penalty=50x)")
+    else:
+        loss_fn = 'categorical_crossentropy'
+    
+    # Compile the network with improved loss and metrics
     model.compile(
         optimizer=keras.optimizers.Adam(learning_rate=LEARNING_RATE),
-        loss=get_loss_function(loss_type='recall_focused', fn_penalty=50.0),
+        loss=loss_fn,
         metrics=['accuracy']
     )    
     model.summary()
@@ -291,18 +350,70 @@ def main():
         )
         callbacks_list.append(stratified_callback)
         print(colored("[INFO] Distance-stratified validation ENABLED", "green"))
+
+    # Dynamic class-weight scheduler (optional)
+    if args.use_dynamic_weight:
+        try:
+            from dynamic_class_weight import DynamicClassWeightCallback
+            # Attention trainer converted y_val to categorical later; use int labels
+            y_val_int = np.asarray(y_val).astype(int)
+            dyn_cb = DynamicClassWeightCallback((X_val, y_val_int), base_weight=args.dyn_base,
+                                                beta=args.dyn_beta, min_w=args.dyn_min_w, max_w=args.dyn_max_w,
+                                                batch_size=args.batch_size)
+            callbacks_list.append(dyn_cb)
+            print(colored("[INFO] Dynamic positive-class weight scheduler ENABLED", "cyan"))
+        except Exception as e:
+            print(colored(f"[WARN] Could not enable dynamic weight callback: {e}", "yellow"))
     
     # Train
     print(colored("\n[INFO] Starting training...", "cyan"))
-    history = model.fit(
-        X_train,
-        y_train,
+    fit_kwargs = dict(
+        x=X_train,
+        y=y_train,
         validation_data=(X_val, y_val),
         batch_size=BATCH_SIZE,
         epochs=1000,
         callbacks=callbacks_list,
         verbose=2
     )
+    if sample_weight is not None:
+        fit_kwargs['sample_weight'] = sample_weight
+
+    # Add epoch-end validation metrics callback (handles one-hot targets)
+    from sklearn.metrics import precision_score, recall_score, confusion_matrix
+
+    class ValMetricsCallback(keras.callbacks.Callback):
+        def __init__(self, val_data):
+            super().__init__()
+            self.x_val, self.y_val = val_data
+
+        def on_epoch_end(self, epoch, logs=None):
+            preds = self.model.predict(self.x_val, verbose=0)
+            preds = np.argmax(preds, axis=1)
+            # y_val may be categorical one-hot or ints
+            y = np.array(self.y_val)
+            if y.ndim > 1 and y.shape[-1] == 2:
+                y_true = np.argmax(y, axis=1)
+            else:
+                y_true = y.astype(int)
+            try:
+                tn, fp, fn, tp = confusion_matrix(y_true, preds).ravel()
+            except Exception:
+                from collections import Counter
+                c = Counter(zip(y_true, preds))
+                tp = c.get((1,1), 0)
+                tn = c.get((0,0), 0)
+                fp = c.get((0,1), 0)
+                fn = c.get((1,0), 0)
+            precision = precision_score(y_true, preds, zero_division=0)
+            recall = recall_score(y_true, preds, zero_division=0)
+            print(colored(f"[EPOCH {epoch}] val_precision={precision:.4f} val_recall={recall:.4f} tp={tp} fp={fp} tn={tn} fn={fn}", "magenta"))
+
+    callbacks_list.append(ValMetricsCallback((X_val, y_val)))
+
+    # Respect max_epochs argument
+    fit_kwargs['epochs'] = args.max_epochs
+    history = model.fit(**fit_kwargs)
     
     # Save history
     hist_df = pd.DataFrame(history.history)
@@ -316,6 +427,24 @@ def main():
     print(colored(f"History saved: {HISTORY_SAVE}", "cyan"))
     print(colored(f"Total epochs: {len(history.history['loss'])}", "yellow"))
     print(colored(f"Best val_accuracy: {max(history.history['val_accuracy']):.4f}", "yellow"))
+
+    # Save training metadata if configured
+    try:
+        if getattr(config, 'SAVE_TRAINING_METADATA', False):
+            meta = {
+                'loss': args.loss,
+                'focal_alpha': float(args.focal_alpha),
+                'focal_gamma': float(args.focal_gamma),
+                'class_weight': float(args.class_weight) if args.class_weight is not None else None,
+                'use_dynamic_weight': bool(getattr(args, 'use_dynamic_weight', False)),
+                'model_path': str(MODEL_SAVE),
+            }
+            meta_path = config.RESULTS_DIR / 'attention_crnn_training_metadata.json'
+            with open(meta_path, 'w') as _m:
+                json.dump(meta, _m, indent=2)
+            print(colored(f"[INFO] Training metadata saved: {meta_path}", "cyan"))
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":

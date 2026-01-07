@@ -27,7 +27,7 @@ DATASET_VAL_DIR = EXTRACTION_DIR / "dataset_val"
 DATASET_TEST_DIR = EXTRACTION_DIR / "dataset_test"
 
 # Config of datasets used for training and validation
-CONFIG_DATASET_PATH = PROJECT_ROOT / "0 - DADS dataset extraction" / "augment_config_v3.json"
+CONFIG_DATASET_PATH = PROJECT_ROOT / "0 - DADS dataset extraction" / "augment_config_v4.json"
 
 # Feature extraction paths
 EXTRACTED_FEATURES_DIR = PROJECT_ROOT / "0 - DADS dataset extraction" / "extracted_features"
@@ -83,6 +83,10 @@ ENSEMBLE_MODEL_PATHS = {
 # Performance calculation paths
 PREDICTIONS_DIR = RESULTS_DIR / "predictions"
 PREDICTIONS_DIR.mkdir(exist_ok=True)
+
+# Detailed performance metrics directory
+PERFORMANCE_DIR = RESULTS_DIR / "performance"
+PERFORMANCE_DIR.mkdir(exist_ok=True)
 
 CNN_PREDICTIONS_PATH = PREDICTIONS_DIR / "cnn_predictions.json"
 RNN_PREDICTIONS_PATH = PREDICTIONS_DIR / "rnn_predictions.json"
@@ -143,7 +147,7 @@ AUDIO_DURATION_S = 4.0
 
 # Backwards-compatible `DURATION` (integer seconds)
 DURATION = int(AUDIO_DURATION_S)
-NUM_SEGMENTS = 10
+NUM_SEGMENTS = 1
 
 # WAV write subtype used by augmentation/save routines (must be a valid subtype for soundfile)
 # Examples: 'PCM_16', 'FLOAT'
@@ -182,15 +186,78 @@ MEL_VAL_INDEX_PATH = EXTRACTED_FEATURES_DIR / "mel_val_index.json"
 # Model inference configuration
 # Adaptive thresholds for each model (auto-calibrated or manually set)
 MODEL_THRESHOLDS = {
-    "CNN": 0.5,      # Default threshold
-    "RNN": 0.5,      # Will be auto-calibrated if AUTO_CALIBRATE_THRESHOLDS=True
-    "CRNN": 0.5,
-    "Attention_CRNN": 0.5,
+    "CNN": 0.61,
+    "RNN": 0.01,
+    "CRNN": 0.70,
+    "Attention_CRNN": 0.77,
 }
 
+# Normalize MODEL_THRESHOLDS keys for internal use so scripts expecting
+# canonical uppercase names (e.g. 'ATTENTION_CRNN') work consistently.
+def _normalize_model_key(k: str) -> str:
+    # Make keys like 'Attention-CRNN' or 'Attention_CRNN' -> 'ATTENTION_CRNN'
+    return k.replace('-', '_').replace(' ', '_').upper()
+
+_NORMALIZED_THRESHOLDS = {}
+for _k, _v in MODEL_THRESHOLDS.items():
+    _NORMALIZED_THRESHOLDS[_normalize_model_key(_k)] = float(_v)
+
+# Expose a normalized mapping for internal lookup; keep original for backward compatibility
+MODEL_THRESHOLDS_NORMALIZED = _NORMALIZED_THRESHOLDS
+
+# Note: we intentionally avoid mutating `MODEL_THRESHOLDS` to add uppercase
+# duplicate keys (e.g. both 'Attention_CRNN' and 'ATTENTION_CRNN').
+# Use `MODEL_THRESHOLDS_NORMALIZED` for canonical uppercase lookup across
+# scripts. This prevents confusing duplicate entries in config dumps.
+
 # Auto-calibration settings
-AUTO_CALIBRATE_THRESHOLDS = False  # Set to True to auto-calibrate on first performance calculation
-TARGET_RECALL = 0.95  # Target recall for threshold calibration (prefer false positives over false negatives)
+# Enable automatic threshold calibration (scripts may choose to run calibration
+# on first performance evaluation when this is True).
+AUTO_CALIBRATE_THRESHOLDS = True  # Set to True to auto-calibrate on first performance calculation
+
+# Default calibration behaviour (used by `calibrate_thresholds.py` when run
+# non-interactively or by automation). Use 'class_aware' to balance per-class
+# precision targets (recommended for reducing ambient false positives).
+CALIBRATION_MODE = 'class_aware'            # 'class_aware' | 'target_recall' | 'max_f1' | 'precision_at_recall' | 'weighted'
+# Relaxed calibration defaults (favor more balanced recall/precision)
+CALIBRATION_MIN_PREC_DRONE = 0.70           # Minimum required precision for drone (positive) class (relaxed)
+CALIBRATION_MIN_PREC_AMBIENT = 0.85         # Minimum required precision / NPV for ambient (negative) class (relaxed)
+CALIBRATION_CLASS_ALPHA = 0.40              # Fallback weighting: alpha*prec_drone + (1-alpha)*prec_ambient (favor recall more)
+CALIBRATION_SAVE_TO_VISUALIZER = True       # Write `6 - Visualization/outputs/model_thresholds.json` when saving
+
+TARGET_RECALL = 0.95  # Target recall for threshold calibration (fallback when using target_recall mode)
+
+# --- Loss / training defaults (source of truth) ---------------------------
+# Use these values across trainers; trainers will read these when CLI args
+# are not provided so `config.py` is the single source of truth.
+LOSS_DEFAULTS = {
+    'loss_type': 'focal',           # 'bce' | 'weighted_bce' | 'focal' | 'recall_focused'
+    'focal_alpha': 0.75,
+    'focal_gamma': 2.0,
+    'class_weight_drone': 3.0,
+    'use_dynamic_weight': True
+}
+
+# Save training metadata alongside saved models
+SAVE_TRAINING_METADATA = True
+
+# Default distance weights (meters -> multiplier) used by
+# `distance_weighted_loss`. Includes 700m as requested for long-range.
+DEFAULT_DISTANCE_WEIGHTS = {
+    700: 12.0,
+    500: 10.0,
+    350: 8.0,
+    200: 5.0,
+    100: 2.0,
+    50: 1.0,
+    0: 1.0
+}
+
+# Path to calibrated thresholds JSON produced by `calibrate_thresholds.py`
+# This is the file the pipeline will create/remove between runs.
+CALIBRATION_FILE_PATH = RESULTS_DIR / "calibrated_thresholds.json"
+# String form (avoid calling get_path_str before it's defined)
+CALIBRATION_FILE_PATH_STR = str(CALIBRATION_FILE_PATH)
 
 # Enforce usage of precomputed features only. When True, any code path that would
 # compute MELs on-the-fly should instead read `mel_test_index.json` or fail.
@@ -261,3 +328,42 @@ MEL_VAL_INDEX_PATH_STR = get_path_str(MEL_VAL_INDEX_PATH)
 # String versions of voted paths dictionaries
 VOTED_PATHS_STR = {k: get_path_str(v) for k, v in VOTED_PATHS.items()}
 SCORES_PATHS_STR = {k: get_path_str(v) for k, v in SCORES_PATHS.items()}
+
+
+# Attempt to load auto-generated thresholds from visualization outputs. This file is
+# produced by the visualization/calibration steps and contains recommended
+# thresholds per model. If present, override `MODEL_THRESHOLDS` values with the
+# `target_threshold` (preferred) or `best_threshold` otherwise.
+try:
+    import json
+    VIS_THRESH_PATH = PROJECT_ROOT / '6 - Visualization' / 'outputs' / 'model_thresholds.json'
+    if VIS_THRESH_PATH.exists():
+        with open(VIS_THRESH_PATH, 'r') as _f:
+            vis_thresh = json.load(_f)
+
+        def normalize_name(name):
+            # Normalize keys like 'Attention-CRNN' -> 'ATTENTION_CRNN'
+            return ''.join(c if c.isalnum() else '_' for c in name).upper()
+
+        # Build mapping from normalized names to canonical config keys
+        canonical_keys = {k: k for k in MODEL_THRESHOLDS.keys()}
+        normalized_to_canonical = {normalize_name(k): k for k in canonical_keys}
+
+        for model_name, values in vis_thresh.items():
+            norm = normalize_name(model_name)
+            if norm in normalized_to_canonical:
+                canonical = normalized_to_canonical[norm]
+                # prefer target_threshold if available
+                chosen = values.get('target_threshold', values.get('best_threshold'))
+                try:
+                    MODEL_THRESHOLDS[canonical] = float(chosen)
+                    # Keep the normalized mapping in sync so imports that read
+                    # `MODEL_THRESHOLDS_NORMALIZED` after this point see updated values.
+                    MODEL_THRESHOLDS_NORMALIZED[_normalize_model_key(canonical)] = float(chosen)
+                except Exception:
+                    pass
+
+        print(f"[config] Loaded model thresholds from: {get_path_str(VIS_THRESH_PATH)}")
+except Exception:
+    # silently ignore to keep config import stable
+    pass
