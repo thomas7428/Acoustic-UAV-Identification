@@ -13,6 +13,7 @@
 #   ./run_full_pipeline.sh [OPTIONS]
 #
 # Options:
+#   --download-offline-dads  Download full DADS dataset for offline use (run once)
 #   --skip-dataset        Skip dataset preparation (reuse existing)
 #   --skip-features       Skip feature extraction (reuse existing MEL files)
 #   --skip-training       Skip model training (reuse existing models)
@@ -28,6 +29,7 @@
 #   --help                Show this help message
 #
 # Examples:
+#   ./run_full_pipeline.sh --download-offline-dads  # Download DADS once for offline use
 #   ./run_full_pipeline.sh --parallel --thresholds 0.4,0.5,0.6
 #   ./run_full_pipeline.sh --skip-dataset --models CNN,CRNN
 #   ./run_full_pipeline.sh --skip-features --skip-viz
@@ -87,6 +89,19 @@ ORIGINAL_ARGS=("$@")
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
+        --download-offline-dads)
+            echo -e "${BLUE}╔════════════════════════════════════════════════════════════╗${NC}"
+            echo -e "${BLUE}║      DOWNLOADING FULL DADS DATASET (OFFLINE MODE)         ║${NC}"
+            echo -e "${BLUE}╚════════════════════════════════════════════════════════════╝${NC}"
+            echo ""
+            cd "$PROJECT_DIR/0 - DADS dataset extraction"
+            bash download_full_dads_offline.sh
+            echo ""
+            echo -e "${GREEN}✓ Offline dataset downloaded successfully${NC}"
+            echo -e "${GREEN}  Future runs will automatically use the offline dataset${NC}"
+            echo ""
+            exit 0
+            ;;
         --skip-dataset)
             SKIP_DATASET=true
             shift

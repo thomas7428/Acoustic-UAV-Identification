@@ -366,14 +366,34 @@ def step_3_distribute_and_split(script_dir, train_ratio, val_ratio, test_ratio, 
 
 
 def step_1_download(script_dir, drone_samples, no_drone_samples, dry_run):
-    """Step 1: Download DADS dataset."""
-    print_step(1, 6, "Download DADS Dataset")
+    """Step 1: Download DADS dataset or use offline dataset if available."""
+    print_step(1, 6, "Prepare DADS Dataset")
     
     if dry_run:
-        print_warning("Dry run - skipping actual download")
+        print_warning("Dry run - skipping dataset preparation")
         return True
 
-    # Import and call the downloader directly to avoid subprocess overhead.
+    # Check if offline dataset exists
+    offline_dir = config.DATASET_DADS_OFFLINE_DIR
+    if offline_dir.exists() and (offline_dir / "0").exists() and (offline_dir / "1").exists():
+        print(f"{colors.GREEN}✓ Found offline DADS dataset: {offline_dir}{colors.ENDC}")
+        print(f"{colors.CYAN}  Using offline dataset directly (no download needed){colors.ENDC}\n")
+        
+        # Simply use the offline dataset as source - no need to copy
+        # The augmentation and splitting steps will read from this directly
+        # Update the config to point to offline dataset
+        import config as cfg_module
+        cfg_module.DATASET_DADS_DIR = offline_dir
+        config.DATASET_DADS_DIR = offline_dir
+        
+        print_success(f"Using offline dataset with {len(list((offline_dir / '0').glob('*.wav'))):,} ambient + {len(list((offline_dir / '1').glob('*.wav'))):,} drone samples")
+        return True
+    
+    # No offline dataset - download from HuggingFace
+    print(f"{colors.YELLOW}⚠ No offline dataset found at: {offline_dir}{colors.ENDC}")
+    print(f"{colors.CYAN}  Downloading from Hugging Face...{colors.ENDC}")
+    print(f"{colors.CYAN}  (Run: ./run_full_pipeline.sh --download-offline-dads to create offline dataset){colors.ENDC}\n")
+    
     try:
         sys.path.insert(0, str(script_dir))
         from download_and_prepare_dads import download_and_prepare_dads
@@ -397,7 +417,7 @@ def step_2_augment(script_dir, config_file, dry_run):
     try:
         sys.path.insert(0, str(script_dir))
         import json
-        from augment_dataset_v2 import generate_augmented_samples
+        from augment_dataset_v3 import generate_augmented_samples
 
         # Load augmentation config. Accept absolute paths or resolve relative to script_dir.
         cfg_candidate = Path(config_file)
@@ -411,7 +431,7 @@ def step_2_augment(script_dir, config_file, dry_run):
         with open(cfg_path, 'r') as f:
             aug_cfg = json.load(f)
 
-        # Call directly
+        # Call directly (v3 with parallel processing)
         stats = generate_augmented_samples(aug_cfg, dry_run=False)
         print_success("Augmentation completed (direct call)")
         return True

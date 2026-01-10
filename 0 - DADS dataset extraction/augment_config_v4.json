@@ -466,8 +466,14 @@
       ],
       "description": "Simulates rotor speed variations due to load/wind"
     }
-  },
-  "changes_from_v3": [
+  },  "mems_simulation": {
+    "enabled": true,
+    "highpass_cutoff_hz": 100,
+    "noise_floor_db": -60,
+    "max_spl_db": 94,
+    "apply_probability": 0.5,
+    "description": "Simulate MEMS microphone characteristics (high-pass filter, thermal noise, SPL limiting)"
+  },  "changes_from_v3": [
     "CRITICAL FIX: Reduced 500m dominance from 60% \u2192 25%",
     "BALANCED: Increased 350m from 20% \u2192 25% (both mid-range equal)",
     "IMPROVED: Increased 200m from 3% \u2192 10% (closer detection)",

@@ -20,6 +20,7 @@ DATASET_ROOT = PROJECT_ROOT / "0 - DADS dataset extraction" / DATASET_NAME
 # Canonical dataset folders (centralized names used across scripts)
 EXTRACTION_DIR = PROJECT_ROOT / "0 - DADS dataset extraction"
 DATASET_DADS_DIR = EXTRACTION_DIR / "dataset_dads"
+DATASET_DADS_OFFLINE_DIR = EXTRACTION_DIR / "dataset_DADS_offline"  # Full DADS dataset for offline use
 DATASET_AUGMENTED_DIR = EXTRACTION_DIR / "dataset_augmented"
 DATASET_COMBINED_DIR = EXTRACTION_DIR / "dataset_combined"
 DATASET_TRAIN_DIR = EXTRACTION_DIR / "dataset_train"
@@ -148,6 +149,10 @@ AUDIO_DURATION_S = 4.0
 # Backwards-compatible `DURATION` (integer seconds)
 DURATION = int(AUDIO_DURATION_S)
 NUM_SEGMENTS = 1
+
+# Parallel processing for augmentation
+import os as _os
+AUGMENTATION_MAX_WORKERS = int(_os.environ.get('AUGMENTATION_WORKERS', _os.cpu_count() or 4))
 
 # WAV write subtype used by augmentation/save routines (must be a valid subtype for soundfile)
 # Examples: 'PCM_16', 'FLOAT'

@@ -4,7 +4,7 @@
       "path": "/var/home/bazzite/Acoustic-UAV-Identification/0 - DADS dataset extraction/dataset_train",
       "classes": {
         "0": {
-          "count": 8000,
+          "count": 20583,
           "sampled": 300,
           "sample_rates": [
             22050,
@@ -1216,7 +1216,7 @@
           ]
         },
         "1": {
-          "count": 8000,
+          "count": 35146,
           "sampled": 300,
           "sample_rates": [
             22050,
@@ -2428,13 +2428,13 @@
           ]
         }
       },
-      "total_files": 16000
+      "total_files": 55729
     },
     {
       "path": "/var/home/bazzite/Acoustic-UAV-Identification/0 - DADS dataset extraction/dataset_val",
       "classes": {
         "0": {
-          "count": 1000,
+          "count": 2572,
           "sampled": 300,
           "sample_rates": [
             22050,
@@ -3646,7 +3646,7 @@
           ]
         },
         "1": {
-          "count": 1000,
+          "count": 4393,
           "sampled": 300,
           "sample_rates": [
             22050,
@@ -4858,13 +4858,13 @@
           ]
         }
       },
-      "total_files": 2000
+      "total_files": 6965
     },
     {
       "path": "/var/home/bazzite/Acoustic-UAV-Identification/0 - DADS dataset extraction/dataset_test",
       "classes": {
         "0": {
-          "count": 1000,
+          "count": 2574,
           "sampled": 300,
           "sample_rates": [
             22050,
@@ -6076,7 +6076,7 @@
           ]
         },
         "1": {
-          "count": 1000,
+          "count": 4394,
           "sampled": 300,
           "sample_rates": [
             22050,
@@ -7288,12 +7288,14 @@
           ]
         }
       },
-      "total_files": 2000
+      "total_files": 6968
     }
   ],
-  "extracted_features": {},
+  "extracted_features": {
+    "error": "extracted_features dir not found: /var/home/bazzite/Acoustic-UAV-Identification/0 - DADS dataset extraction/extracted_features"
+  },
   "summary": {
     "total_datasets_paths_found": 3,
-    "extracted_features_found": 0
+    "extracted_features_found": 1
   }
 }
