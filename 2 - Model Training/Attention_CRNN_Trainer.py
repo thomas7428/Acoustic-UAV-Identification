@@ -29,6 +29,10 @@ from termcolor import colored
 sys.path.append(str(Path(__file__).parent.parent))
 import config
 
+# Import universal feature loader (supports NPZ and JSON)
+sys.path.insert(0, str(Path(__file__).parent.parent / 'tools'))
+from feature_loader import load_mel_features
+
 # TensorFlow imports
 import tensorflow as tf
 from tensorflow import keras
@@ -65,22 +69,18 @@ def load_data():
     from pathlib import Path
     from sklearn.model_selection import train_test_split
 
-    # Get the train and val directories
-    print(f"[INFO] Loading precomputed features from {VAL_DATA_PATH}")
-    with open(VAL_DATA_PATH, 'r') as f:
-        val_data = json.load(f)
-    val_mels = np.array(val_data.get('mel', []))
-    val_labels = np.array(val_data.get('labels', []))
+    # Load features using universal loader (auto-detects NPZ or JSON)
+    print(f"[INFO] Loading validation features (NPZ/JSON auto-detect)")
+    val_mels, val_labels, _ = load_mel_features('val')
     if len(val_mels) == 0:
-        raise RuntimeError(f"Precomputed features file {VAL_DATA_PATH} contains no 'mel' entries")
+        raise RuntimeError(f"No validation MEL features found")
 
-    print(f"[INFO] Loading precomputed features from {TRAIN_DATA_PATH}")
-    with open(TRAIN_DATA_PATH, 'r') as f:
-        train_data = json.load(f)
-    train_mels = np.array(train_data.get('mel', []))
-    train_labels = np.array(train_data.get('labels', []))
+    print(f"[INFO] Loading training features (NPZ/JSON auto-detect)")
+    train_mels, train_labels, _ = load_mel_features('train')
     if len(train_mels) == 0:
-        raise RuntimeError(f"Precomputed features file {TRAIN_DATA_PATH} contains no 'mel' entries")
+        raise RuntimeError(f"No training MEL features found")
+    
+    print(f"[INFO] Loaded {len(train_mels)} train samples, {len(val_mels)} val samples")
     return train_mels, train_labels, val_mels, val_labels
     
 def prepare_datasets():
