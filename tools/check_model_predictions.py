@@ -41,9 +41,13 @@ if __name__ == '__main__':
     X, y = load_data()
     print('X shape:', X.shape, 'y shape:', y.shape, 'unique y:', np.unique(y, return_counts=True))
 
-    # Add channel dimension if needed
-    if X.ndim == 3:
+    # Add channel dimension ONLY for CNN/CRNN/Attention (Conv2D needs 4D)
+    # RNN uses pure LSTM and expects 3D: (samples, time_steps, features)
+    if X.ndim == 3 and args.model != 'rnn':
         X = X[..., np.newaxis]
+        print(f'Added channel dimension for {args.model} (Conv2D models need 4D)')
+    elif args.model == 'rnn':
+        print(f'Keeping 3D shape for RNN (LSTM expects 3D input)')
 
     # Load model without compiling
     model = tf.keras.models.load_model(str(model_path), compile=False)

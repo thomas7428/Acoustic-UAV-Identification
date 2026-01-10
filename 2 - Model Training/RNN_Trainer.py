@@ -71,12 +71,10 @@ def prepare_datasets():
     X_test = X_validation
     y_test = y_validation
 
-    # Add channel dimension for RNN compatibility (CRITICAL FIX)
     # RNN expects 3D input: (samples, time_steps, features)
-    # Without this, model receives wrong shape and fails to learn
-    X_train = X_train[..., np.newaxis]  # Shape: (# samples, # time steps, # coefficients, 1)
-    X_validation = X_validation[..., np.newaxis]
-    X_test = X_test[..., np.newaxis]
+    # Data from load_data() is already 3D: (samples, n_mels=44, time_frames=173)
+    # NO transformation needed - unlike CNN which needs 4D for Conv2D
+    # Shape: (samples, n_mels, time_frames) - perfect for LSTM
 
     return X_train, X_validation, X_test, y_train, y_validation, y_test
 
@@ -85,9 +83,10 @@ def build_model(input_shape):
     # Create model.
     model = keras.Sequential()
 
-    # 3 LSTM layers
+    # 3 Bidirectional LSTM layers
+    # input_shape only needed on first layer - subsequent layers infer automatically
     model.add(keras.layers.Bidirectional(keras.layers.LSTM(100, return_sequences=True), input_shape=input_shape))
-    model.add(keras.layers.Bidirectional(keras.layers.LSTM(100, return_sequences=True), input_shape=(input_shape, 1)))
+    model.add(keras.layers.Bidirectional(keras.layers.LSTM(100, return_sequences=True)))
     model.add(keras.layers.Bidirectional(keras.layers.LSTM(100)))
 
     # Dense layer
@@ -188,19 +187,9 @@ if __name__ == "__main__":
         callbacks_list.append(stratified_callback)
         print(colored("[INFO] Distance-stratified validation ENABLED", "green"))
 
-    # Dynamic class-weight scheduler (optional)
-    if args.use_dynamic_weight:
-        try:
-            from dynamic_class_weight import DynamicClassWeightCallback
-            dyn_cb = DynamicClassWeightCallback((X_validation, y_validation), base_weight=1.0,
-                                                beta=0.8, min_w=0.5, max_w=8.0,
-                                                batch_size=BATCH_SIZE)
-            callbacks_list.append(dyn_cb)
-            print(colored("[INFO] Dynamic positive-class weight scheduler ENABLED", "cyan"))
-        except Exception as e:
-            print(colored(f"[WARN] Could not enable dynamic weight callback: {e}", "yellow"))
-
     # Build the RNN network.
+    # Data shape: (samples, n_mels, time_frames) = (N, 44, 173)
+    # Input shape for LSTM: (time_steps, features) = (44, 173)
     input_shape = (X_train.shape[1], X_train.shape[2])
     model = build_model(input_shape)
 

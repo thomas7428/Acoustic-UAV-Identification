@@ -206,8 +206,9 @@ def main():
         if true_label != expected_cat:
             raise RuntimeError(f"Label incohérent pour {filename}: {true_label} vs {expected_cat}")
         X = np.array(mel, dtype=np.float32)
-        # Ensure channel dimension
-        if X.ndim == 3:
+        # Add channel dimension ONLY for CNN/CRNN/Attention (Conv2D needs 4D)
+        # RNN uses pure LSTM and expects 3D: (samples, time_steps, features)
+        if X.ndim == 3 and args.model != 'RNN':
             X = X[..., np.newaxis]
         filenames.append(filename)
         X_list.append(X)

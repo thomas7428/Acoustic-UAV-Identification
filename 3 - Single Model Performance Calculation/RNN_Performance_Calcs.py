@@ -134,7 +134,9 @@ def save_predictions(dataset_path: Path, json_path: str, limit: int = None):
         for p in batch_paths:
             mel = get_mel_for_path(p)
             X_batch.append(mel)
-        X_batch = np.stack(X_batch, axis=0)[..., np.newaxis]
+        # RNN expects 3D input: (batch, time_steps, features)
+        # NO np.newaxis needed - unlike CNN/CRNN which need 4D for Conv2D
+        X_batch = np.stack(X_batch, axis=0)
         preds = kss.predict(X_batch)
         for prob in preds:
             scores.append(float(prob))
