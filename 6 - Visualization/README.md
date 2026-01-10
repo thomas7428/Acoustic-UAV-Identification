@@ -2,42 +2,75 @@
 
 Ce dossier contient les scripts de visualisation et d'analyse pour le projet Acoustic UAV Identification.
 
-## Scripts disponibles
+## 🚀 Quick Start
 
-## 🎯 Scripts Modernes (Recommandés)
+### Usage Recommandé (Simple et Rapide)
 
-### 🆕 1. `performance_comparison.py` ⭐ **PRINCIPAL**
-**Script de visualisation des performances utilisant les résultats JSON précalculés.**
-
-Visualisation complète à partir des fichiers générés par `Universal_Perf_Tester.py`.
-
-**Features :**
-- Chargement depuis `config.PERFORMANCE_DIR`
-- Comparaison multi-modèles, multi-splits, multi-thresholds
-- Métriques globales, par classe, et par sous-catégorie
-- Matrices de confusion, courbes par distance/type
-- Analyse de l'impact des thresholds
-- Rapports texte détaillés
-
-**Usage rapide :**
 ```bash
-# Tous les résultats disponibles
-python performance_comparison.py --all
+# Pipeline complet de visualisations
+python run_visualizations.py
 
-# Presets rapides
-python quick_viz.py all                  # Tout visualiser
-python quick_viz.py compare-models       # Comparaison standard
+# Pipeline rapide (sans audio examples ni threshold calibration)
+python quick_viz.py fast
+
+# Seulement la comparaison de performances
+python quick_viz.py performance
+
+# Pipeline sans audio examples (plus rapide)
+python run_visualizations.py --skip-audio
 ```
-
-**Avantages :**
-- ✅ Instantané (JSON précalculés)
-- ✅ Config centralisée
-- ✅ Filtres flexibles
-- ✅ Pas de fallback
 
 ---
 
-### 2. `modern_dataset_analysis.py`
+## 📋 Scripts Principaux
+
+### 🎯 1. `run_visualizations.py` ⭐ **RUNNER UNIFIÉ**
+**Point d'entrée principal pour générer toutes les visualisations.**
+
+Pipeline complet en 8 étapes:
+1. Select Best Results (génère best_results_summary.json)
+2. Performance Comparison (meilleurs thresholds)
+3. Threshold Calibration Comparison
+4. Model Comparison Plots
+5. SNR Distribution Analysis
+6. Dataset Composition Analysis
+7. Modern Threshold Calibration
+8. HTML Report Generation
+
+**Options:**
+```bash
+python run_visualizations.py                    # Complet
+python run_visualizations.py --skip-audio       # Sans audio examples
+python run_visualizations.py --skip-threshold   # Sans threshold calibration
+```
+
+**Avantages:**
+- ✅ Pipeline automatique complet
+- ✅ Gestion d'erreurs robuste
+- ✅ Résumé clair des résultats
+- ✅ Inclut select_best_results automatiquement
+
+---
+
+### ⚡ 2. `quick_viz.py` - Lanceur de Presets
+**Raccourcis pour les cas d'usage courants.**
+
+**Presets disponibles:**
+- `all` - Pipeline complet
+- `fast` - Rapide (sans audio/threshold)
+- `performance` - Seulement performances
+- `no-audio` - Complet sans audio
+
+**Usage:**
+```bash
+python quick_viz.py all           # Pipeline complet
+python quick_viz.py fast          # Rapide
+python quick_viz.py performance   # Juste performances
+```
+
+---
+
+## 🎨 Scripts de Visualisation Individuels
 **Analyse de la composition et statistiques du dataset.**
 
 Visualise la distribution des classes, sous-catégories et splits.
@@ -55,7 +88,7 @@ python modern_dataset_analysis.py
 
 ---
 
-### 3. `modern_audio_examples.py`
+### 3. `modern_dataset_analysis.py`
 **Génère des exemples audio représentatifs avec visualisations.**
 
 Crée une page HTML interactive avec lecteurs audio, waveforms et spectrogrammes.
@@ -74,7 +107,7 @@ python modern_audio_examples.py
 
 ---
 
-### 4. `modern_threshold_calibration.py`
+### 4. `modern_audio_examples.py`
 **Analyse systématique des thresholds de décision.**
 
 Recommande les thresholds optimaux par modèle pour différents critères (F1, accuracy, équilibrage FP/FN).
@@ -92,32 +125,41 @@ python modern_threshold_calibration.py
 
 ---
 
-### 5. `run_all_visualizations.py`
-**Lance tous les scripts modernes en une seule commande.**
-
-**Usage :**
-```bash
-python run_all_visualizations.py                # Tout générer
+### 5. `modern_threshold_calibration.py`
 python run_all_visualizations.py --skip-audio   # Sans audio examples
 ```
 
 ---
 
-### 6. `quick_viz.py`
-**Launcher rapide avec presets pour performance_comparison.py.**
+### 6. `threshold_calibration_comparison.py`
+Analyse l'impact des thresholds sur les performances.
 
-**Presets disponibles :**
-- `all` - Tous les résultats
-- `compare-models` - Tous modèles sur test @ t=0.5
-- `threshold-analysis` - CNN avec thresholds multiples
-- `custom` - Arguments personnalisés
+**Génère:** `threshold_calibration_comparison.png`
 
-**Usage :**
-```bash
-python quick_viz.py all
-python quick_viz.py compare-models
-python quick_viz.py custom --models CNN --splits test val
-```
+---
+
+### 7. `model_comparison_plots.py`
+Comparaisons visuelles entre modèles.
+
+**Génère:** `model_performance_comparison.png`
+
+---
+
+### 8. `snr_distribution.py`
+Analyse de la distribution SNR.
+
+**Génère:** `snr_distribution.png`
+
+---
+
+### 9. `generate_html_report.py`
+Génère un rapport HTML interactif avec toutes les visualisations.
+
+**Génère:**
+- `performance_report.html`
+- `images/` (dossier avec toutes les images)
+
+**Note:** Utilise maintenant des chemins relatifs au lieu de base64 (~10x plus léger).
 
 ---
 
@@ -125,38 +167,64 @@ python quick_viz.py custom --models CNN --splits test val
 
 ```
 6 - Visualization/
-├── performance_comparison.py      ⭐ Principal
-├── quick_viz.py                   🚀 Launcher
-├── modern_dataset_analysis.py     📊 Dataset
-├── modern_audio_examples.py       🎵 Audio
-├── modern_threshold_calibration.py 🎯 Thresholds
-├── run_all_visualizations.py      🔄 Tout exécuter
+├── run_visualizations.py          ⭐ Runner unifié (PRINCIPAL)
+├── quick_viz.py                   🚀 Presets rapides
+├── select_best_results.py         🎯 Sélection best results
+├── performance_comparison_best.py 📊 Comparaison performances
+├── modern_dataset_analysis.py     📈 Analyse dataset
+├── modern_audio_examples.py       🎵 Exemples audio
+├── modern_threshold_calibration.py 🎚️ Calibration thresholds
+├── threshold_calibration_comparison.py
+├── model_comparison_plots.py
+├── snr_distribution.py
+├── generate_html_report.py        🌐 Rapport HTML
 ├── README.md                      📖 Documentation
-├── WORKFLOW.md                    📋 Guide complet
 ├── outputs/                       💾 Résultats
 │   ├── *.png
 │   ├── *.txt
+│   ├── *.json
+│   ├── performance_report.html
+│   ├── images/                    (pour le HTML report)
 │   └── audio_examples/
-└── archives/                      🗄️ Scripts legacy
-    └── README.md
+└── _deprecated/                   🗄️ Scripts obsolètes
+    ├── _old_run_all_visualizations.py
+    ├── _old_run_enhanced_visualizations.py
+    └── _deprecated_performance_comparison.py
 
 ```
 
 ---
 
-## 📚 Scripts Legacy (Archives)
+## 🔄 Migration depuis l'Ancien Système
 
-Les anciens scripts ont été déplacés dans `archives/` :
-- `audio_examples.py`
-- `dataset_analysis.py`
-- `model_performance.py`
-- `threshold_calibration.py`
-- `performance_by_distance.py`
-- `augmentation_impact.py`
+### Si vous utilisiez `run_all_visualizations.py`:
+```bash
+# Ancien:
+python run_all_visualizations.py
 
-**⚠️ Ces scripts sont obsolètes.** Utilisez les versions modernes ci-dessus.
+# Nouveau:
+python run_visualizations.py
+```
 
-Voir `archives/README.md` pour plus de détails.
+### Si vous utilisiez `run_enhanced_visualizations.py`:
+```bash
+# Ancien:
+python run_enhanced_visualizations.py
+
+# Nouveau:
+python run_visualizations.py
+```
+
+### Si vous utilisiez `performance_comparison.py --all`:
+```bash
+# Ancien:
+python performance_comparison.py --all
+
+# Nouveau:
+python quick_viz.py all
+# ou
+python run_visualizations.py
+```
 
 ---
 

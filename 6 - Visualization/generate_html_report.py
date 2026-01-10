@@ -2,10 +2,11 @@
 """
 HTML Report Generator
 Génère un rapport HTML interactif avec tous les résultats et visualisations.
+Utilise des chemins relatifs pour les images (plus léger et plus rapide que base64).
 """
 import sys
 import json
-import base64
+import shutil
 from pathlib import Path
 from datetime import datetime
 
@@ -13,16 +14,22 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import config
 
 
-def encode_image_to_base64(image_path):
+def copy_image_to_output(image_path, images_dir, output_name=None):
     """
-    Encode une image en base64 pour l'intégration dans le HTML.
+    Copie une image vers le dossier images/ du rapport.
+    Retourne le chemin relatif pour le HTML.
     """
     try:
-        with open(image_path, 'rb') as f:
-            image_data = f.read()
-        return base64.b64encode(image_data).decode('utf-8')
+        if not image_path.exists():
+            return None
+        
+        dest_name = output_name or image_path.name
+        dest_path = images_dir / dest_name
+        shutil.copy2(image_path, dest_path)
+        
+        return f"./images/{dest_name}"
     except Exception as e:
-        print(f"  ✗ Error encoding image {image_path}: {e}")
+        print(f"  ✗ Error copying image {image_path}: {e}")
         return None
 
 
@@ -50,24 +57,30 @@ def generate_html_report(output_file):
         print("[ERROR] No best results found! Ensure canonical performance JSONs exist in config.PERFORMANCE_DIR and rerun visualizations.")
         return
     
-    # Charger les images
+    # Préparer les dossiers de sortie
+    output_dir = Path(output_file).parent
+    images_dir = output_dir / "images"
+    images_dir.mkdir(exist_ok=True)
+    
+    # Charger et copier les images
     viz_dir = Path(__file__).parent / "outputs"
     
     images = {
         'threshold_calibration': viz_dir / "threshold_calibration_comparison.png",
         'model_comparison': viz_dir / "model_performance_comparison.png",
-        'performance_by_distance': viz_dir / "performance_by_distance.png",
+        'best_global_metrics': viz_dir / "best_global_metrics_comparison.png",
+        'best_confusion_matrices': viz_dir / "best_confusion_matrices.png",
         'snr_distribution': viz_dir / "snr_distribution.png"
     }
     
-    # Encoder les images en base64
-    encoded_images = {}
+    # Copier les images et obtenir chemins relatifs
+    image_paths = {}
     for name, path in images.items():
         if path.exists():
-            encoded = encode_image_to_base64(path)
-            if encoded:
-                encoded_images[name] = encoded
-                print(f"  ✓ Encoded: {name}")
+            rel_path = copy_image_to_output(path, images_dir)
+            if rel_path:
+                image_paths[name] = rel_path
+                print(f"  ✓ Copied: {name}")
     
     # Générer le HTML
     html_content = f"""
@@ -330,46 +343,57 @@ def generate_html_report(output_file):
 """
     
     # Ajouter les sections de visualisation
-    if 'threshold_calibration' in encoded_images:
+    if 'threshold_calibration' in image_paths:
         html_content += f"""
             <section id="threshold">
                 <h2>📈 Threshold Calibration Analysis</h2>
                 <p>This analysis shows how different classification thresholds affect model performance across various metrics.</p>
                 <div class="image-container">
-                    <img src="data:image/png;base64,{encoded_images['threshold_calibration']}" alt="Threshold Calibration">
+                    <img src="{image_paths['threshold_calibration']}" alt="Threshold Calibration">
                 </div>
             </section>
 """
     
-    if 'model_comparison' in encoded_images:
+    if 'model_comparison' in image_paths:
         html_content += f"""
             <section id="comparison">
                 <h2>🔍 Model Performance Comparison</h2>
                 <p>Comparative analysis of all models across different performance metrics.</p>
                 <div class="image-container">
-                    <img src="data:image/png;base64,{encoded_images['model_comparison']}" alt="Model Comparison">
+                    <img src="{image_paths['model_comparison']}" alt="Model Comparison">
                 </div>
             </section>
 """
     
-    if 'performance_by_distance' in encoded_images:
+    if 'best_global_metrics' in image_paths:
         html_content += f"""
-            <section id="distance">
-                <h2>📏 Performance by Distance</h2>
-                <p>Analysis of model performance across different recording distances.</p>
+            <section id="metrics">
+                <h2>📊 Global Metrics Comparison</h2>
+                <p>Comparison of accuracy, precision, recall, and F1-score across all models.</p>
                 <div class="image-container">
-                    <img src="data:image/png;base64,{encoded_images['performance_by_distance']}" alt="Performance by Distance">
+                    <img src="{image_paths['best_global_metrics']}" alt="Global Metrics">
                 </div>
             </section>
 """
     
-    if 'snr_distribution' in encoded_images:
+    if 'best_confusion_matrices' in image_paths:
+        html_content += f"""
+            <section id="confusion">
+                <h2>🎯 Confusion Matrices</h2>
+                <p>Detailed confusion matrices for each model showing classification performance.</p>
+                <div class="image-container">
+                    <img src="{image_paths['best_confusion_matrices']}" alt="Confusion Matrices">
+                </div>
+            </section>
+"""
+    
+    if 'snr_distribution' in image_paths:
         html_content += f"""
             <section id="snr">
                 <h2>🔊 SNR Distribution Analysis</h2>
                 <p>Distribution of Signal-to-Noise Ratio (SNR) across augmented dataset categories.</p>
                 <div class="image-container">
-                    <img src="data:image/png;base64,{encoded_images['snr_distribution']}" alt="SNR Distribution">
+                    <img src="{image_paths['snr_distribution']}" alt="SNR Distribution">
                 </div>
             </section>
 """
