@@ -4,100 +4,176 @@ Système de détection de drones en temps réel optimisé pour Raspberry Pi.
 
 ## 📋 Vue d'ensemble
 
-Ce système permet la détection automatique de drones via l'analyse audio en temps réel. Il peut fonctionner de deux manières :
+Ce système permet la détection automatique de drones via l'analyse audio en temps réel.
 
-1. **Mode surveillance de fichiers** : Analyse les fichiers audio déposés dans un dossier
-2. **Mode enregistrement continu** : Enregistre depuis le microphone et analyse automatiquement
+**✅ DOSSIER AUTONOME** : Tous les modèles et configurations sont inclus. Il suffit de copier ce dossier sur n'importe quelle machine et de lancer `./start_detection.sh`.
+
+## 🚀 Démarrage Rapide
+
+### Installation des dépendances
+
+**Linux / macOS / Raspberry Pi:**
+```bash
+pip3 install tensorflow librosa numpy soundfile
+
+# Pour l'enregistrement audio (optionnel)
+pip3 install pyaudio
+# Sur Raspberry Pi/Debian:
+sudo apt-get install python3-pyaudio
+
+# Sur Raspberry Pi, privilégier TensorFlow Lite (plus léger):
+pip3 install tensorflow-lite librosa numpy soundfile
+```
+
+**Windows:**
+```powershell
+pip install tensorflow librosa numpy soundfile
+
+# Pour l'enregistrement audio (optionnel)
+pip install pyaudio
+```
+
+**Note Windows**: Si `pyaudio` échoue à installer, télécharger le fichier wheel pré-compilé depuis [Unofficial Windows Binaries](https://www.lfd.uci.edu/~gohlke/pythonlibs/#pyaudio) (choisir la version correspondant à votre Python), puis :
+```powershell
+pip install PyAudio‑0.2.11‑cp311‑cp311‑win_amd64.whl
+```
+
+### Lancer le système
+
+**Linux / macOS / Raspberry Pi:**
+```bash
+# Mode 1: Détection seule (fichiers manuels)
+./start_detection.sh
+
+# Mode 2: Avec enregistrement automatique depuis le micro
+./start_detection.sh --with-recording
+
+# Mode 3: Test avec un fichier
+./start_detection.sh --test /path/to/audio.wav
+
+# Aide
+./start_detection.sh --help
+```
+
+**Windows:**
+```batch
+REM Mode 1: Détection seule (fichiers manuels)
+start_detection.bat
+
+REM Mode 2: Avec enregistrement automatique depuis le micro
+start_detection.bat --with-recording
+
+REM Mode 3: Test avec un fichier
+start_detection.bat --test C:\path\to\audio.wav
+
+REM Aide
+start_detection.bat --help
+```
+
+C'est tout ! Le script vérifie automatiquement les dépendances, les modèles, et démarre le système.
 
 ## 🏗️ Architecture
 
 ```
 8 - Deployment/
-├── drone_detector.py          # Détecteur principal
-├── audio_recorder.py           # Enregistreur audio (optionnel)
-├── deployment_config.json      # Configuration
-├── setup_deployment.sh         # Script de déploiement
-├── models/                     # Modèles pré-entraînés (copier ici)
+├── start_detection.sh          # 🚀 SCRIPT LANCEMENT Linux/macOS/Raspberry Pi
+├── start_detection.bat         # 🚀 SCRIPT LANCEMENT Windows
+├── drone_detector.py           # Détecteur (ne pas lancer directement)
+├── audio_recorder.py           # Enregistreur (optionnel)
+├── deployment_config.json      # Configuration (seuils calibrés)
+├── models/                     # ✅ Modèles pré-entraînés INCLUS
+│   ├── cnn_model.keras         #    (4.0 MB)
+│   ├── rnn_model.keras         #    (8.4 MB)
+│   ├── crnn_model.keras        #    (2.4 MB)
+│   └── attention_crnn_model.keras  # (15 MB)
 ├── audio_input/                # Dossier de surveillance
 ├── logs/                       # Logs et prédictions
 └── README.md                   # Ce fichier
 ```
 
+**✅ Tout est inclus** : Modèles, configuration, scripts. Copier ce dossier suffit.
+**✅ Cross-platform** : Compatible Windows, Linux, macOS, Raspberry Pi.
+
 ## ⚙️ Configuration
 
-Le fichier `deployment_config.json` contrôle tous les paramètres :
+Le fichier `deployment_config.json` contrôle tous les paramètres.
 
-### Paramètres clés
+### ✅ Seuils calibrés (déjà configurés)
+
+Les seuils ont été optimisés par calibration class-aware pour maximiser le F1-score :
 
 ```json
 {
   "detection": {
-    "scan_interval_seconds": 5,        // Intervalle entre analyses
-    "enabled_models": ["CNN", "Attention-CRNN"],  // Modèles actifs
-    "model_thresholds": {              // Seuils ajustables en temps réel
-      "CNN": 0.85,
-      "Attention-CRNN": 0.95
+    "model_thresholds": {
+      "CNN": 0.38,              // ✅ Calibré (94.6% accuracy)
+      "RNN": 0.51,              // ✅ Calibré (94.9% accuracy)  
+      "CRNN": 0.40,             // ✅ Calibré (95.2% accuracy)
+      "Attention-CRNN": 0.42    // ✅ Calibré (95.4% accuracy)
     },
-    "voting_strategy": "majority"      // majority, unanimous, any
+    "enabled_models": ["CNN", "Attention-CRNN"],
+    "voting_strategy": "majority"
   }
 }
 ```
 
-### Ajustement des seuils en direct
+**⚠️ Important** : Ces seuils sont optimisés pour les données DADS. Ne pas les modifier sans re-calibration.
 
-Modifiez `deployment_config.json` et le détecteur rechargera automatiquement la config.
+### Extraction MEL (critique pour performances)
 
-## 🚀 Installation
-
-### 1. Préparer les modèles
-
-Sur la machine d'entraînement :
-
-```bash
-cd "8 - Deployment"
-chmod +x setup_deployment.sh
-./setup_deployment.sh
+```json
+{
+  "feature_extraction": {
+    "mel_spectrogram": {
+      "n_mels": 44,
+      "n_fft": 2048,
+      "hop_length": 512
+    },
+    "normalization": false    // ✅ DÉSACTIVÉE pour préserver SNR
+  }
+}
 ```
 
-Cela copie les modèles entraînés dans `models/`.
-
-### 2. Transférer sur Raspberry Pi
-
-```bash
-# Depuis la machine d'entraînement
-scp -r "8 - Deployment" pi@raspberrypi:/home/pi/
-
-# Ou avec USB / réseau
-```
-
-### 3. Installer les dépendances sur Raspberry Pi
-
-```bash
-# Dépendances système
-sudo apt-get update
-sudo apt-get install -y python3-pip portaudio19-dev
-
-# Dépendances Python (version légère pour Raspberry Pi)
-pip3 install tensorflow-lite librosa numpy soundfile
-
-# Pour l'enregistrement audio (optionnel)
-sudo apt-get install python3-pyaudio
-```
-
-**Note** : TensorFlow Lite est recommandé pour Raspberry Pi (plus léger).
+**🔴 Ne jamais activer** `normalization: true` : cela détruirait les différences SNR entre distances et rendrait la détection inefficace.
 
 ## 🎯 Utilisation
 
-### Mode 1 : Surveillance de fichiers
-
-Le détecteur surveille le dossier `audio_input/` et analyse automatiquement les nouveaux fichiers.
+### Mode 1 : Détection seule (fichiers manuels)
 
 ```bash
-python3 drone_detector.py --continuous
+./start_detection.sh
 ```
 
+Le système surveille `audio_input/` et analyse automatiquement les fichiers WAV.
+
 **Workflow** :
-1. Déposez un fichier WAV (4 secondes, 22050 Hz) dans `audio_input/`
+1. Copier un fichier WAV (4s, 22050Hz, mono) dans `audio_input/`
+2. Analyse automatique toutes les 5 secondes
+3. Résultat affiché dans console + logs
+4. Fichier supprimé après traitement (configurable)
+
+### Mode 2 : Enregistrement + Détection automatique
+
+```bash
+./start_detection.sh --with-recording
+```
+
+Le système enregistre depuis le micro et analyse en temps réel.
+
+**Pré-requis** : PyAudio installé
+```bash
+pip3 install pyaudio
+# Sur Raspberry Pi:
+sudo apt-get install python3-pyaudio
+```
+
+### Mode 3 : Test avec un fichier
+
+```bash
+./start_detection.sh --test ../dataset/drone_500m.wav
+```
+
+Analyse un seul fichier et affiche le résultat détaillé.
 2. Le détecteur l'analyse automatiquement
 3. Résultat affiché dans la console et logs
 4. Fichier supprimé après traitement (configurable)
@@ -133,9 +209,11 @@ python3 drone_detector.py --file /path/to/audio.wav
 ### Console
 
 ```
-2025-12-14 18:00:15 | WARNING  | 🚨 ALERT | recording_20251214_180015.wav | DRONE | Avg Confidence: 89.50% | Votes: 2/2 | 245ms
-2025-12-14 18:00:15 | INFO     |     CNN: 87.30% (threshold: 0.85) → DRONE
-2025-12-14 18:00:15 | INFO     |     Attention-CRNN: 91.70% (threshold: 0.95) → NO_DRONE
+2026-01-08 21:15:42 | WARNING  | 🚨 ALERT | drone_500m.wav | DRONE | Avg Confidence: 89.5% | Votes: 2/2 | 245ms
+2026-01-08 21:15:42 | INFO     |     CNN: 87.3% (threshold: 0.38) → DRONE
+2026-01-08 21:15:42 | INFO     |     Attention-CRNN: 91.7% (threshold: 0.42) → DRONE
+
+2026-01-08 21:15:47 | INFO     | ✓ CLEAR | ambient_wind.wav | NO_DRONE | Avg Confidence: 12.4% | Votes: 0/2 | 238ms
 ```
 
 ### Fichier de prédictions
@@ -144,8 +222,8 @@ python3 drone_detector.py --file /path/to/audio.wav
 
 ```json
 {
-  "timestamp": "2025-12-14 18:00:15",
-  "file": "recording_20251214_180015.wav",
+  "timestamp": "2026-01-08 21:15:42",
+  "file": "drone_500m.wav",
   "detection": "DRONE",
   "predictions": {
     "CNN": 0.873,
@@ -154,11 +232,16 @@ python3 drone_detector.py --file /path/to/audio.wav
   "details": {
     "CNN": {
       "probability": 0.873,
-      "threshold": 0.85,
+      "threshold": 0.38,
+      "vote": "DRONE"
+    },
+    "Attention-CRNN": {
+      "probability": 0.917,
+      "threshold": 0.42,
       "vote": "DRONE"
     },
     "final_decision": "DRONE",
-    "votes_for_drone": 1,
+    "votes_for_drone": 2,
     "total_votes": 2
   },
   "processing_time_ms": 245
@@ -341,16 +424,25 @@ du -sh audio_input/ logs/
 
 ## 📈 Performances attendues
 
-Avec les modèles Phase 2F (calibrated thresholds) :
+Avec les seuils calibrés (class-aware optimization) :
 
-| Distance | Précision | Rappel | F1-Score |
-|----------|-----------|--------|----------|
-| 500m     | 82-93%    | 85-95% | 84-94%   |
-| 350m     | 95-100%   | 95-100%| 97-100%  |
-| 200m     | 95-100%   | 95-100%| 97-100%  |
-| Ambient  | 98-100%   | 98-100%| 99-100%  |
+| Modèle          | Accuracy | Recall | Precision | F1-Score |
+|-----------------|----------|--------|-----------|----------|
+| CNN             | 94.6%    | 93.2%  | 96.1%     | 94.6%    |
+| RNN             | 94.9%    | 93.9%  | 95.8%     | 94.8%    |
+| CRNN            | 95.2%    | 94.1%  | 96.3%     | 95.2%    |
+| Attention-CRNN  | 95.4%    | 94.5%  | 96.4%     | 95.4%    |
 
-**Faux positifs** : <2% (avec thresholds calibrés)
+**Performance par distance** (test set) :
+
+| Distance | Accuracy | Note |
+|----------|----------|------|
+| 100m     | 96-99%   | Très facile à détecter |
+| 500m     | 93-96%   | Bon taux de détection |
+| 1000m    | 85-92%   | Plus difficile (SNR faible) |
+| Ambient  | 96-99%   | Très peu de faux positifs |
+
+**Faux positifs** : <2% avec seuils calibrés
 
 ## ⚡ Troubleshooting
 

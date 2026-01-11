@@ -49,7 +49,7 @@ class DroneDetector:
         self.setup_directories()
         
         self.logger.info("=" * 70)
-        self.logger.info("🎯 DRONE DETECTION SYSTEM INITIALIZED")
+        self.logger.info("[*] DRONE DETECTION SYSTEM INITIALIZED")
         self.logger.info("=" * 70)
         self.logger.info(f"Loaded {len(self.models)} models: {list(self.models.keys())}")
         self.logger.info(f"Monitoring: {self.config['audio']['input_directory']}")
@@ -75,10 +75,36 @@ class DroneDetector:
             self.logger.error(f"Failed to reload config: {e}")
             return False
     
+    def cleanup_old_logs(self, log_dir: Path, days: int = 7):
+        """
+        Remove log files older than specified days.
+        
+        Args:
+            log_dir: Directory containing log files
+            days: Keep logs from last N days
+        """
+        try:
+            current_time = time.time()
+            cutoff_time = current_time - (days * 86400)  # days in seconds
+            
+            removed_count = 0
+            for log_file in log_dir.glob("*.log"):
+                if log_file.stat().st_mtime < cutoff_time:
+                    log_file.unlink()
+                    removed_count += 1
+            
+            if removed_count > 0:
+                print(f"[CLEANUP] Removed {removed_count} old log file(s)")
+        except Exception as e:
+            print(f"[WARN] Log cleanup failed: {e}")
+    
     def setup_logging(self):
         """Configure logging."""
         log_dir = Path(self.config['output']['log_directory'])
         log_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Cleanup old logs (keep only last 7 days)
+        self.cleanup_old_logs(log_dir, days=7)
         
         log_level = getattr(logging, self.config['output']['log_level'])
         
@@ -88,11 +114,12 @@ class DroneDetector:
         
         # File handler
         log_file = log_dir / f"detector_{datetime.now().strftime('%Y%m%d')}.log"
-        fh = logging.FileHandler(log_file)
+        fh = logging.FileHandler(log_file, encoding='utf-8')
         fh.setLevel(log_level)
         
-        # Console handler
-        ch = logging.StreamHandler()
+        # Console handler (force UTF-8 on Windows)
+        import sys
+        ch = logging.StreamHandler(sys.stdout)
         ch.setLevel(log_level)
         
         # Formatter
@@ -121,6 +148,33 @@ class DroneDetector:
         for dir_path in dirs:
             Path(dir_path).mkdir(parents=True, exist_ok=True)
     
+    def load_thresholds(self) -> Dict[str, float]:
+        """Load thresholds from external thresholds file.
+        
+        Returns:
+            Dict mapping calibrated_key to threshold value
+        """
+        thresholds_file = self.config['detection'].get('thresholds_file', './thresholds.json')
+        thresholds_path = Path(thresholds_file)
+        
+        if not thresholds_path.exists():
+            self.logger.warning(f"Thresholds file not found: {thresholds_path}")
+            return {}
+        
+        try:
+            with open(thresholds_path, 'r') as f:
+                data = json.load(f)
+            
+            # Extract thresholds from file
+            thresholds = {}
+            for model_key, model_data in data.get('models', {}).items():
+                thresholds[model_key] = model_data.get('threshold', 0.5)
+            
+            return thresholds
+        except Exception as e:
+            self.logger.error(f"Failed to load thresholds: {e}")
+            return {}
+    
     def load_models(self):
         """Load trained models from disk."""
         models_dir = Path(self.config['models']['directory'])
@@ -128,6 +182,9 @@ class DroneDetector:
         available_models = self.config['models']['available_models']
         
         self.logger.info("Loading models...")
+        
+        # Load thresholds from external file
+        calibrated_thresholds = self.load_thresholds()
         
         for model_name in enabled_models:
             if model_name not in available_models:
@@ -143,12 +200,18 @@ class DroneDetector:
             
             try:
                 model = tf.keras.models.load_model(model_path, compile=False)
+                
+                # Get threshold from calibration file using calibrated_key
+                calibrated_key = model_info.get('calibrated_key', model_name)
+                threshold = calibrated_thresholds.get(calibrated_key, 0.5)
+                
                 self.models[model_name] = {
                     'model': model,
-                    'threshold': model_info['threshold'],
+                    'threshold': threshold,
+                    'calibrated_key': calibrated_key,
                     'description': model_info['description']
                 }
-                self.logger.info(f"  ✓ Loaded {model_name}: {model_info['description']}")
+                self.logger.info(f"  [OK] Loaded {model_name}: {model_info['description']} (t={threshold:.2f})")
             except Exception as e:
                 self.logger.error(f"  ✗ Failed to load {model_name}: {e}")
         
@@ -170,7 +233,8 @@ class DroneDetector:
             sr = self.config['audio']['sample_rate']
             duration = self.config['audio']['duration_seconds']
             
-            audio, _ = librosa.load(audio_path, sr=sr, duration=duration)
+            # Convert Path to string for librosa
+            audio, _ = librosa.load(str(audio_path), sr=sr, duration=duration)
             
             # Ensure exact duration
             expected_samples = int(sr * duration)
@@ -193,12 +257,11 @@ class DroneDetector:
                 fmax=mel_config['fmax']
             )
             
-            # Convert to log scale
+            # Convert to log scale (ref=np.max pour compatibilité avec l'entraînement)
             mel_db = librosa.power_to_db(mel, ref=np.max)
             
-            # Normalize if configured
-            if self.config['feature_extraction']['normalization']:
-                mel_db = (mel_db - mel_db.mean()) / (mel_db.std() + 1e-8)
+            # NOTE: Pas de normalisation pour préserver les différences SNR entre distances
+            # La normalisation détruirait l'information critique pour la détection
             
             return mel_db
             
@@ -216,6 +279,14 @@ class DroneDetector:
         Returns:
             Dict of {model_name: drone_probability}
         """
+        # Reload thresholds if configured
+        if self.config['detection'].get('reload_thresholds_every_prediction', False):
+            calibrated_thresholds = self.load_thresholds()
+            for model_name, model_info in self.models.items():
+                calibrated_key = model_info.get('calibrated_key', model_name)
+                if calibrated_key in calibrated_thresholds:
+                    model_info['threshold'] = calibrated_thresholds[calibrated_key]
+        
         # Prepare input (add batch and channel dimensions)
         X = features[np.newaxis, ..., np.newaxis]  # (1, 44, 90, 1)
         
@@ -226,8 +297,17 @@ class DroneDetector:
                 # Get prediction
                 pred = model_info['model'].predict(X, verbose=0)
                 
-                # Extract drone probability (class 1)
-                drone_prob = float(pred[0][1])
+                # Extract drone probability (handle different architectures)
+                if pred.shape[1] == 2:
+                    # Softmax with 2 classes (CNN, CRNN, Attention-CRNN)
+                    drone_prob = float(pred[0][1])
+                elif pred.shape[1] == 1:
+                    # Sigmoid (RNN)
+                    drone_prob = float(pred[0][0])
+                else:
+                    self.logger.error(f"Unexpected prediction shape for {model_name}: {pred.shape}")
+                    drone_prob = 0.0
+                
                 predictions[model_name] = drone_prob
                 
             except Exception as e:
@@ -246,15 +326,13 @@ class DroneDetector:
         Returns:
             Tuple of (is_drone: bool, details: dict)
         """
-        # Get thresholds (runtime updateable)
-        thresholds = self.config['detection']['model_thresholds']
-        
         # Count votes
         votes = []
         details = {}
         
         for model_name, prob in predictions.items():
-            threshold = thresholds.get(model_name, 0.85)
+            # Get threshold from model info (loaded from thresholds.json)
+            threshold = self.models[model_name].get('threshold', 0.5)
             is_drone = prob >= threshold
             votes.append(is_drone)
             
@@ -338,12 +416,12 @@ class DroneDetector:
         """Log detection result."""
         is_drone = result['detection'] == 'DRONE'
         
-        # Emoji and color
+        # Prefix
         if is_drone:
-            prefix = "🚨 ALERT"
+            prefix = "[!] ALERT"
             level = logging.WARNING
         else:
-            prefix = "✓ CLEAR"
+            prefix = "[+] CLEAR"
             level = logging.INFO
         
         # Main message
@@ -364,13 +442,13 @@ class DroneDetector:
         
         self.logger.log(level, msg)
         
-        # Detailed breakdown
-        if is_drone and self.config['alerts']['include_model_breakdown']:
+        # Detailed breakdown - ALWAYS show for both DRONE and CLEAR
+        if self.config['alerts']['include_model_breakdown']:
             for model_name, model_details in result['details'].items():
                 if model_name not in ['final_decision', 'votes_for_drone', 'total_votes', 'strategy']:
                     self.logger.info(
                         f"    {model_name}: {model_details['probability']:.2%} "
-                        f"(threshold: {model_details['threshold']:.2f}) → {model_details['vote']}"
+                        f"(threshold: {model_details['threshold']:.2f}) -> {model_details['vote']}"
                     )
     
     def save_prediction(self, result: Dict):
@@ -427,9 +505,15 @@ class DroneDetector:
         self.logger.info(f"Press Ctrl+C to stop")
         
         try:
+            iteration = 0
             while True:
                 # Scan and process
                 self.scan_and_process()
+                
+                # Periodic cleanup (every 100 iterations ~8 minutes at 5s interval)
+                iteration += 1
+                if iteration % 100 == 0:
+                    self.cleanup_old_audio_files()
                 
                 # Wait for next scan
                 time.sleep(scan_interval)
@@ -438,6 +522,24 @@ class DroneDetector:
             self.logger.info("\n" + "=" * 70)
             self.logger.info("Monitoring stopped by user")
             self.logger.info("=" * 70)
+    
+    def cleanup_old_audio_files(self):
+        """Remove old audio files from input directory (safety cleanup)."""
+        try:
+            input_dir = Path(self.config['audio']['input_directory'])
+            current_time = time.time()
+            cutoff_time = current_time - 300  # Remove files older than 5 minutes
+            
+            removed_count = 0
+            for audio_file in input_dir.glob("*.wav"):
+                if audio_file.stat().st_mtime < cutoff_time:
+                    audio_file.unlink()
+                    removed_count += 1
+            
+            if removed_count > 0:
+                self.logger.debug(f"Cleaned up {removed_count} old audio file(s)")
+        except Exception as e:
+            self.logger.warning(f"Audio cleanup failed: {e}")
     
     def run_single_file(self, audio_path: str):
         """Process single audio file (for testing)."""

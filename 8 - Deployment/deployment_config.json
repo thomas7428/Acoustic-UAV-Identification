@@ -13,17 +13,13 @@
   
   "detection": {
     "scan_interval_seconds": 5,
-    "confidence_threshold_default": 0.85,
-    "model_thresholds": {
-      "CNN": 0.85,
-      "RNN": 0.95,
-      "CRNN": 0.90,
-      "Attention-CRNN": 0.95
-    },
-    "enabled_models": ["CNN", "Attention-CRNN"],
+    "confidence_threshold_default": 0.5,
+    "thresholds_file": "./thresholds.json",
+    "enabled_models": ["CNN", "RNN", "CRNN", "Attention-CRNN", "new_CNN", "new_RNN", "new_CRNN", "new_Attention-CRNN"],
     "voting_strategy": "majority",
     "min_consecutive_detections": 2,
-    "description": "Models vote: if majority says DRONE above threshold, trigger alert"
+    "reload_thresholds_every_prediction": true,
+    "description": "All 8 models loaded. Thresholds from thresholds.json (modify on-the-fly)."
   },
   
   "models": {
@@ -32,26 +28,50 @@
       "CNN": {
         "filename": "cnn_model.keras",
         "architecture": "CNN",
-        "description": "Fast, good baseline performance",
-        "threshold": 0.85
+        "description": "Original CNN model",
+        "calibrated_key": "CNN"
       },
       "RNN": {
         "filename": "rnn_model.keras",
         "architecture": "RNN",
-        "description": "Temporal patterns, needs high threshold",
-        "threshold": 0.95
+        "description": "Original RNN model",
+        "calibrated_key": "RNN"
       },
       "CRNN": {
         "filename": "crnn_model.keras",
         "architecture": "CRNN",
-        "description": "Balanced performance",
-        "threshold": 0.90
+        "description": "Original CRNN model",
+        "calibrated_key": "CRNN"
       },
       "Attention-CRNN": {
         "filename": "attention_crnn_model.keras",
         "architecture": "Attention-CRNN",
-        "description": "Best overall, focuses on key features",
-        "threshold": 0.95
+        "description": "Original Attention-CRNN model",
+        "calibrated_key": "Attention-CRNN"
+      },
+      "new_CNN": {
+        "filename": "new_cnn_model.keras",
+        "architecture": "CNN",
+        "description": "NEW CNN (trained Jan 10-11, 2026)",
+        "calibrated_key": "new_CNN"
+      },
+      "new_RNN": {
+        "filename": "new_rnn_model.keras",
+        "architecture": "RNN",
+        "description": "NEW RNN (trained Jan 10-11, 2026)",
+        "calibrated_key": "new_RNN"
+      },
+      "new_CRNN": {
+        "filename": "new_crnn_model.keras",
+        "architecture": "CRNN",
+        "description": "NEW CRNN (trained Jan 10-11, 2026)",
+        "calibrated_key": "new_CRNN"
+      },
+      "new_Attention-CRNN": {
+        "filename": "new_attention_crnn_model.keras",
+        "architecture": "Attention-CRNN",
+        "description": "NEW Attention-CRNN (trained Jan 10-11, 2026)",
+        "calibrated_key": "new_Attention-CRNN"
       }
     }
   },
@@ -64,8 +84,9 @@
       "fmin": 20,
       "fmax": 11025
     },
-    "normalization": true,
-    "preprocessing": "standard"
+    "normalization": false,
+    "preprocessing": "none",
+    "description": "MEL extraction with ref=1.0, NO normalization to preserve SNR differences"
   },
   
   "output": {

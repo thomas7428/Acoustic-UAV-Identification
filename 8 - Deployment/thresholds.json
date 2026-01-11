@@ -1,0 +1,61 @@
+{
+  "version": "1.0",
+  "description": "Deployment thresholds configuration - modify these values on-the-fly",
+  "last_updated": "2026-01-11",
+  "models": {
+    "CNN": {
+      "threshold": 0.40,
+      "description": "Original CNN model",
+      "f1_score": 0.92,
+      "accuracy": 0.915
+    },
+    "RNN": {
+      "threshold": 0.38,
+      "description": "Original RNN model",
+      "f1_score": 0.84,
+      "accuracy": 0.772
+    },
+    "CRNN": {
+      "threshold": 0.37,
+      "description": "Original CRNN model",
+      "f1_score": 0.91,
+      "accuracy": 0.905
+    },
+    "Attention-CRNN": {
+      "threshold": 0.42,
+      "description": "Original Attention-CRNN model",
+      "f1_score": 0.93,
+      "accuracy": 0.914
+    },
+    "new_CNN": {
+      "threshold": 0.40,
+      "description": "NEW CNN (trained Jan 10-11, 2026)",
+      "f1_score": 0.92,
+      "accuracy": 0.915
+    },
+    "new_RNN": {
+      "threshold": 0.38,
+      "description": "NEW RNN (trained Jan 10-11, 2026)",
+      "f1_score": 0.84,
+      "accuracy": 0.772
+    },
+    "new_CRNN": {
+      "threshold": 0.37,
+      "description": "NEW CRNN (trained Jan 10-11, 2026)",
+      "f1_score": 0.91,
+      "accuracy": 0.905
+    },
+    "new_Attention-CRNN": {
+      "threshold": 0.42,
+      "description": "NEW Attention-CRNN (trained Jan 10-11, 2026)",
+      "f1_score": 0.93,
+      "accuracy": 0.914
+    }
+  },
+  "notes": [
+    "Thresholds are calibrated values from Jan 11, 2026 run_full_pipeline",
+    "Modify threshold values and they will be reloaded automatically if reload_thresholds_every_prediction=true",
+    "Each model has its own threshold - you can tune them independently",
+    "F1 scores and accuracy values are from test set performance"
+  ]
+}

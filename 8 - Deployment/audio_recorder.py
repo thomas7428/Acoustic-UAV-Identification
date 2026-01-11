@@ -49,7 +49,7 @@ class AudioRecorder:
         self.pa = pyaudio.PyAudio()
         
         print("=" * 70)
-        print("🎤 AUDIO RECORDER FOR DRONE DETECTION")
+        print("AUDIO RECORDER FOR DRONE DETECTION")
         print("=" * 70)
         print(f"Sample Rate: {self.sample_rate} Hz")
         print(f"Duration: {self.duration} seconds")
@@ -94,7 +94,7 @@ class AudioRecorder:
                 frames_per_buffer=1024
             )
             
-            print(f"🎙️  Recording {self.duration} seconds...", end='', flush=True)
+            print(f"[REC] Recording {self.duration} seconds...", end='', flush=True)
             
             # Calculate number of frames
             frames_per_buffer = 1024
@@ -122,18 +122,25 @@ class AudioRecorder:
             return audio_array
             
         except Exception as e:
-            print(f"\n[ERROR] Recording failed: {e}")
+            print(f"[ERROR] Recording failed: {e}")
             return None
     
     def save_audio(self, audio: np.ndarray, filename: str):
         """
-        Save audio to WAV file.
+        Save audio to WAV file with normalization.
         
         Args:
             audio: Audio data as numpy array
             filename: Output filename
         """
         output_path = self.output_dir / filename
+        
+        # Normalize audio to use full dynamic range
+        max_val = np.abs(audio).max()
+        if max_val > 0:
+            # Normalize to 80% of max to avoid clipping
+            audio = audio * (0.8 / max_val)
+            print(f"[NORM] Normalized audio (gain: {0.8/max_val:.1f}x)")
         
         # Convert back to int16
         audio_int = (audio * 32767).astype(np.int16)
@@ -145,7 +152,7 @@ class AudioRecorder:
             wf.setframerate(self.sample_rate)
             wf.writeframes(audio_int.tobytes())
         
-        print(f"💾 Saved: {output_path.name}")
+        print(f"[SAVE] Saved: {output_path.name}")
     
     def run_continuous(self, interval: int = None):
         """
@@ -172,14 +179,22 @@ class AudioRecorder:
                 audio = self.record_audio()
                 
                 if audio is not None:
-                    # Save
+                    # Delete old recordings BEFORE saving new one
+                    # This ensures the detector finishes processing before deletion
+                    for old_file in self.output_dir.glob("recording_*.wav"):
+                        try:
+                            old_file.unlink()
+                            print(f"[CLEANUP] Removed old: {old_file.name}")
+                        except Exception:
+                            pass  # File in use, will be deleted next time
+                    
+                    # Save new recording
                     self.save_audio(audio, filename)
                     recording_count += 1
-                    print(f"✓ Total recordings: {recording_count}\n")
+                    print(f"[OK] Total recordings: {recording_count}\n")
                 
-                # Wait for next recording
-                print(f"⏳ Waiting {interval} seconds...", flush=True)
-                time.sleep(interval)
+                # No wait - record continuously every 4 seconds
+                # (removed sleep to get new recording immediately)
                 
         except KeyboardInterrupt:
             print("\n\n" + "=" * 70)
@@ -196,7 +211,7 @@ class AudioRecorder:
         
         if audio is not None:
             self.save_audio(audio, filename)
-            print("✓ Recording complete!")
+            print("[OK] Recording complete!")
     
     def cleanup(self):
         """Cleanup resources."""
