@@ -3,12 +3,26 @@ import numpy as np
 import argparse
 from sklearn.model_selection import train_test_split
 from sklearn.utils.class_weight import compute_class_weight
+import tensorflow as tf
 import tensorflow.keras as keras
 import pandas as pd
 from datetime import datetime
 from termcolor import colored
 import sys
 from pathlib import Path
+
+# Optimize CPU threads for 12-core CPU (use all cores)
+tf.config.threading.set_intra_op_parallelism_threads(12)
+tf.config.threading.set_inter_op_parallelism_threads(4)
+
+# Enable GPU memory growth if available
+gpus = tf.config.list_physical_devices('GPU')
+if gpus:
+    try:
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+    except RuntimeError as e:
+        print(f"GPU memory growth config failed: {e}")
 
 # Add project root to path to import config
 sys.path.insert(0, str(Path(__file__).parent.parent))

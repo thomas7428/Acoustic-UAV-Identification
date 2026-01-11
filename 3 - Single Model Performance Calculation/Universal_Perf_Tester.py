@@ -23,9 +23,9 @@ import re
 from collections import defaultdict
 from datetime import datetime
 
-import sys
-sys.path.insert(0, str(Path(__file__).parent.parent))
-import config
+# Import feature loader for NPZ support
+sys.path.insert(0, str(Path(__file__).parent.parent / 'tools'))
+from feature_loader import load_mel_features
 
 
 def calculate_metrics(tp, tn, fp, fn):
@@ -76,25 +76,18 @@ def main():
     print(f"Chargement du modèle {args.model} depuis {model_path}")
     model = tf.keras.models.load_model(str(model_path), compile=False)
     
-    # 2. Charger les MEL features
-    mel_paths = {
-        'train': config.MEL_TRAIN_DATA_PATH,
-        'val': config.MEL_VAL_DATA_PATH,
-        'test': config.MEL_TEST_DATA_PATH
-    }
-    mel_path = mel_paths[args.split]
-    print(f"Chargement des features depuis {mel_path}")
+    # 2. Charger les MEL features (NPZ or JSON auto-detect)
+    print(f"Chargement des features depuis {args.split} split (auto-detect NPZ/JSON)")
     
-    with open(mel_path, 'r') as f:
-        data = json.load(f)
+    mels, labels, mapping = load_mel_features(args.split)
     
-    mels = data['mel']
-    labels = data.get('labels', [])
+    if len(mels) == 0 or len(labels) == 0:
+        raise RuntimeError(f"Aucune feature trouvée pour le split {args.split}")
     
-    if not labels or len(labels) != len(mels):
-        raise RuntimeError(f"Labels manquants ou incompatibles dans {mel_path}")
+    if len(labels) != len(mels):
+        raise RuntimeError(f"Labels incompatibles: {len(labels)} labels vs {len(mels)} mels")
     
-    # 3. Charger les fichiers du dataset pour connaître les catégories
+    # Get filenames from dataset directory (NPZ doesn't store them)
     dataset_dirs = {
         'train': config.DATASET_TRAIN_DIR,
         'val': config.DATASET_VAL_DIR,
@@ -108,26 +101,20 @@ def main():
     files0 = sorted([p.name for p in class0_dir.glob("*.wav")]) if class0_dir.exists() else []
     files1 = sorted([p.name for p in class1_dir.glob("*.wav")]) if class1_dir.exists() else []
     
-    # Tous les fichiers du dataset dans l'ordre (class0 puis class1)
     all_files = files0 + files1
     
-    print(f"\nDataset: {len(all_files)} fichiers")
-    print(f"  Catégorie 0: {len(files0)} fichiers")
-    print(f"  Catégorie 1: {len(files1)} fichiers")
+    if len(all_files) != len(mels):
+        raise RuntimeError(f"Dataset/features mismatch: {len(all_files)} WAV files vs {len(mels)} MELs")
+    
+    print(f"\nDataset: {len(all_files)} fichiers ({len(files0)} class 0, {len(files1)} class 1)")
     print(f"Features: {len(mels)} MELs")
     
-    # 4. Vérifier la cohérence
-    if len(all_files) != len(mels):
-        raise RuntimeError(f"Nombre de fichiers ({len(all_files)}) != nombre de MELs ({len(mels)})")
-    
-    # 5. Créer le mapping filename -> (mel, label) en supposant le même ordre
+    # Create mapping filename -> (mel, label) 
     mel_map = {}
+    expected_categories = {}
     for i, filename in enumerate(all_files):
         mel_map[filename] = (np.array(mels[i], dtype=np.float32), labels[i])
-    
-    # Catégories attendues
-    expected_categories = {fn: 0 for fn in files0}
-    expected_categories.update({fn: 1 for fn in files1})
+        expected_categories[filename] = labels[i]
     
     # 6. Fonction pour extraire sous-catégorie du nom de fichier
     def extract_subcategory(filename, label):
@@ -168,13 +155,26 @@ def main():
             return category.replace('_', ' ')
     
     # 7. Tester chaque fichier
-    # Resolve threshold: use provided arg or fallback to calibrated thresholds in config
-    # Prefer normalized thresholds mapping in config if available
+    # Resolve threshold: Priority: CLI arg > calibrated JSON > config.py
     default_threshold = 0.5
     try:
         default_threshold = config.MODEL_THRESHOLDS_NORMALIZED.get(args.model.upper(), config.MODEL_THRESHOLDS.get(args.model, 0.5))
     except Exception:
         default_threshold = config.MODEL_THRESHOLDS.get(args.model, 0.5)
+    
+    # Try loading from calibrated thresholds JSON
+    if config.CALIBRATION_FILE_PATH.exists():
+        try:
+            import json
+            with open(config.CALIBRATION_FILE_PATH) as f:
+                calib_data = json.load(f)
+            calibrated_threshold = calib_data.get('models', {}).get(args.model.upper(), {}).get('threshold')
+            if calibrated_threshold is not None:
+                print(f"\n✓ Loaded calibrated threshold from {config.CALIBRATION_FILE_PATH.name}: {calibrated_threshold:.4f}")
+                default_threshold = calibrated_threshold
+        except Exception as e:
+            print(f"\n⚠️  Failed to load calibrated threshold: {e}")
+    
     resolved_threshold = args.threshold if args.threshold is not None else default_threshold
     worker_hint = args.workers if args.workers is not None else min(max(1, multiprocessing.cpu_count() - 1), 8)
     print(f"\nTest en cours (threshold={resolved_threshold})... (workers={worker_hint})")

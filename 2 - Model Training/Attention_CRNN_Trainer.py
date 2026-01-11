@@ -40,6 +40,19 @@ from tensorflow.keras import layers, models
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
 from sklearn.utils.class_weight import compute_class_weight
 
+# Limit TensorFlow memory growth to prevent OOM crashes
+gpus = tf.config.list_physical_devices('GPU')
+if gpus:
+    try:
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+    except RuntimeError as e:
+        print(f"GPU memory growth config failed: {e}")
+
+# Optimize CPU threads for 12-core CPU (use all cores)
+tf.config.threading.set_intra_op_parallelism_threads(12)
+tf.config.threading.set_inter_op_parallelism_threads(4)
+
 # Use centralized configuration
 DATASET_DIR = Path(config.PROJECT_ROOT) / "0 - DADS dataset extraction"
 TRAIN_DATA_PATH = Path(config.MEL_TRAIN_DATA_PATH)
@@ -48,6 +61,7 @@ MODEL_SAVE = Path(config.ATTENTION_CRNN_MODEL_PATH)
 HISTORY_SAVE = Path(config.ATTENTION_CRNN_HISTORY_PATH)
 
 # Training parameters (respect config when present)
+# Attention_CRNN is memory-intensive: use config batch size or fallback to safe default
 BATCH_SIZE = getattr(config, 'BATCH_SIZE', 8)
 LEARNING_RATE = getattr(config, 'LEARNING_RATE', 0.0001)
 
@@ -244,7 +258,27 @@ def main():
     print(colored("\n" + "="*70, "magenta"))
     print(colored("  ATTENTION-ENHANCED CRNN TRAINING", "magenta"))
     print(colored("="*70, "magenta"))
-    print(colored(f"\n[CONFIG] Loss function: {args.loss}", "yellow"))
+    
+    # Memory safety check
+    try:
+        import psutil
+        mem = psutil.virtual_memory()
+        mem_available_gb = mem.available / (1024**3)
+        print(colored(f"\n[MEMORY] Available RAM: {mem_available_gb:.2f} GB", "cyan"))
+        
+        if mem_available_gb < 4.0:
+            print(colored(f"[WARNING] Low memory detected! Reducing batch size to 2", "yellow"))
+            if args.batch_size > 2:
+                args.batch_size = 2
+        elif mem_available_gb < 8.0:
+            print(colored(f"[WARNING] Limited memory. Using batch size max 4", "yellow"))
+            if args.batch_size > 4:
+                args.batch_size = 4
+    except ImportError:
+        print(colored("[WARNING] psutil not available, skipping memory check", "yellow"))
+    
+    print(colored(f"\n[CONFIG] Batch size: {args.batch_size}", "yellow"))
+    print(colored(f"[CONFIG] Loss function: {args.loss}", "yellow"))
     if args.loss == 'weighted_bce':
         print(colored(f"[CONFIG] Drone class weight: {args.class_weight}", "yellow"))
     elif args.loss == 'focal':

@@ -27,6 +27,7 @@ import snr_distribution
 import modern_dataset_analysis
 import modern_threshold_calibration
 import modern_audio_examples
+import threshold_analysis
 import generate_html_report
 
 plot_utils.set_style()
@@ -101,19 +102,25 @@ def main():
                   "Analyzing dataset statistics and distributions..."))
     step_num += 1
     
-    # Step 6: Threshold calibration (optional)
+    # Step 6: Threshold calibration analysis
+    if not args.skip_threshold and config.CALIBRATION_FILE_PATH.exists():
+        steps.append((step_num, "Threshold Calibration Analysis", threshold_analysis.main,
+                      "Analyzing calibrated thresholds and optimization curves..."))
+        step_num += 1
+    
+    # Step 7: Legacy threshold calibration (optional)
     if not args.skip_threshold:
-        steps.append((step_num, "Modern Threshold Calibration", modern_threshold_calibration.main,
+        steps.append((step_num, "Legacy Threshold Calibration", modern_threshold_calibration.main,
                       "Generating threshold recommendations..."))
         step_num += 1
     
-    # Step 7: Audio examples (optional)
+    # Step 8: Audio examples (optional)
     if not args.skip_audio:
         steps.append((step_num, "Audio Examples Generation", modern_audio_examples.main,
                       "Generating representative audio examples with visualizations..."))
         step_num += 1
     
-    # Step 8: HTML report
+    # Step 9: HTML report
     steps.append((step_num, "HTML Report Generation", generate_html_report.main,
                   "Creating interactive HTML report..."))
     

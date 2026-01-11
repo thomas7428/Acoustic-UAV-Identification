@@ -89,6 +89,10 @@ PREDICTIONS_DIR.mkdir(exist_ok=True)
 PERFORMANCE_DIR = RESULTS_DIR / "performance"
 PERFORMANCE_DIR.mkdir(exist_ok=True)
 
+# Visualization output directory
+VIZ_OUTPUT_DIR = PROJECT_ROOT / "6 - Visualization" / "outputs"
+VIZ_OUTPUT_DIR.mkdir(exist_ok=True)
+
 CNN_PREDICTIONS_PATH = PREDICTIONS_DIR / "cnn_predictions.json"
 RNN_PREDICTIONS_PATH = PREDICTIONS_DIR / "rnn_predictions.json"
 CRNN_PREDICTIONS_PATH = PREDICTIONS_DIR / "crnn_predictions.json"
@@ -188,6 +192,11 @@ MEL_TRAIN_INDEX_PATH = EXTRACTED_FEATURES_DIR / "mel_train_index.json"
 MEL_VAL_DATA_PATH = EXTRACTED_FEATURES_DIR / "mel_val.json"
 MEL_VAL_INDEX_PATH = EXTRACTED_FEATURES_DIR / "mel_val_index.json"
 
+# Precomputed MEL NPZ paths (for calibration and analysis)
+MEL_TRAIN_NPZ_PATH = EXTRACTED_FEATURES_DIR / "mel_train.npz"
+MEL_VAL_NPZ_PATH = EXTRACTED_FEATURES_DIR / "mel_val.npz"
+MEL_TEST_NPZ_PATH = EXTRACTED_FEATURES_DIR / "mel_test.npz"
+
 # Model inference configuration
 # Adaptive thresholds for each model (auto-calibrated or manually set)
 MODEL_THRESHOLDS = {
@@ -232,6 +241,16 @@ CALIBRATION_SAVE_TO_VISUALIZER = True       # Write `6 - Visualization/outputs/m
 
 TARGET_RECALL = 0.95  # Target recall for threshold calibration (fallback when using target_recall mode)
 
+# --- Training parameters (source of truth) --------------------------------
+# Batch size for training (used by all trainers when no CLI arg provided)
+# With 27 GB RAM available, we can use larger batch sizes for better training
+# CNN/RNN/CRNN: Can handle batch_size=128+ comfortably
+# Attention_CRNN: More memory-intensive, batch_size=128 safe with 21+ GB available
+BATCH_SIZE = 128  # Optimized for 12-core CPU + 21 GB RAM available
+
+# Learning rate (default for all models)
+LEARNING_RATE = 0.0001
+
 # --- Loss / training defaults (source of truth) ---------------------------
 # Use these values across trainers; trainers will read these when CLI args
 # are not provided so `config.py` is the single source of truth.
@@ -263,6 +282,38 @@ DEFAULT_DISTANCE_WEIGHTS = {
 CALIBRATION_FILE_PATH = RESULTS_DIR / "calibrated_thresholds.json"
 # String form (avoid calling get_path_str before it's defined)
 CALIBRATION_FILE_PATH_STR = str(CALIBRATION_FILE_PATH)
+
+# Constraint defaults for threshold calibration
+CALIBRATION_CONSTRAINTS = {
+    'min_recall': 0.90,  # Minimum 90% recall (max 10% false negatives)
+    'min_precision_drone': 0.70,  # Minimum 70% drone precision (PPV)
+    'min_precision_ambient': 0.85  # Minimum 85% ambient precision (NPV)
+}
+
+
+def load_calibrated_thresholds():
+    """Load thresholds from calibration JSON file.
+    
+    Returns:
+        dict: {model_name: threshold} or empty dict if file not found
+    """
+    if not CALIBRATION_FILE_PATH.exists():
+        return {}
+    
+    try:
+        import json
+        with open(CALIBRATION_FILE_PATH) as f:
+            calib_data = json.load(f)
+        
+        thresholds = {}
+        for model_name, model_data in calib_data.get('models', {}).items():
+            if 'threshold' in model_data:
+                thresholds[model_name] = model_data['threshold']
+        
+        return thresholds
+    except Exception as e:
+        print(f"Warning: Failed to load calibrated thresholds: {e}")
+        return {}
 
 # Enforce usage of precomputed features only. When True, any code path that would
 # compute MELs on-the-fly should instead read `mel_test_index.json` or fail.

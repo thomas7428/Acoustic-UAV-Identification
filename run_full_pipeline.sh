@@ -1,13 +1,14 @@
 #!/bin/bash
 ################################################################################
-# Acoustic UAV Detection - Complete Pipeline (v3.0)
+# Acoustic UAV Detection - Complete Pipeline (v3.1)
 # 
 # Pipeline modernisé reflétant la nouvelle architecture:
 # 1. Préparation du dataset (master_setup_v2.py)
 # 2. Extraction des features MEL (Mel_Preprocess_and_Feature_Extract.py)
 # 3. Entraînement des modèles (CNN, RNN, CRNN, ATTENTION_CRNN)
-# 4. Calcul des performances (Universal_Perf_Tester.py)
-# 5. Visualisations (run_all_visualizations.py)
+# 4. Calibration des thresholds (calibrate_thresholds.py - multi-critères)
+# 5. Évaluation des performances (Universal_Perf_Tester.py)
+# 6. Visualisations (run_visualizations.py)
 #
 # Usage:
 #   ./run_full_pipeline.sh [OPTIONS]
@@ -17,22 +18,21 @@
 #   --skip-dataset        Skip dataset preparation (reuse existing)
 #   --skip-features       Skip feature extraction (reuse existing MEL files)
 #   --skip-training       Skip model training (reuse existing models)
+#   --skip-calibration    Skip threshold calibration (use existing thresholds)
 #   --skip-testing        Skip performance testing (reuse existing results)
 #   --models MODEL1,MODEL2  Train only specific models (CNN,RNN,CRNN,ATTENTION_CRNN)
 #   --parallel            Train models in parallel (faster but more CPU)
-#   --thresholds T1,T2    Test with multiple thresholds (e.g., 0.3,0.5,0.7)
-#   --use-class-aware-calibration  Run class-aware calibration between runs
 #   --skip-viz            Skip visualizations
- #   --skip-pre-calib-eval Skip the baseline evaluation before calibration
- #   --skip-calibration    Skip running the calibration step (requires existing calibration file)
- #   --skip-post-calib-eval Skip the evaluation after calibration
+#   --use-class-aware-calibration  Use legacy class-aware calibration (deprecated)
+#   --skip-pre-calib-eval  Skip baseline evaluation (legacy mode)
+#   --skip-post-calib-eval Skip post-calibration evaluation (legacy mode)
 #   --help                Show this help message
 #
 # Examples:
-#   ./run_full_pipeline.sh --download-offline-dads  # Download DADS once for offline use
-#   ./run_full_pipeline.sh --parallel --thresholds 0.4,0.5,0.6
-#   ./run_full_pipeline.sh --skip-dataset --models CNN,CRNN
-#   ./run_full_pipeline.sh --skip-features --skip-viz
+#   ./run_full_pipeline.sh --parallel                        # Full pipeline
+#   ./run_full_pipeline.sh --skip-dataset --models CNN,RNN   # Train specific models
+#   ./run_full_pipeline.sh --skip-training --skip-calibration  # Reuse models/thresholds
+#   ./run_full_pipeline.sh --download-offline-dads           # Download DADS once
 ################################################################################
 
 set -e  # Exit on error
@@ -256,7 +256,8 @@ check_prerequisites() {
         "2 - Model Training/CRNN_Trainer.py"
         "2 - Model Training/Attention_CRNN_Trainer.py"
         "3 - Single Model Performance Calculation/Universal_Perf_Tester.py"
-        "6 - Visualization/run_enhanced_visualizations.py"
+        "3 - Single Model Performance Calculation/calibrate_thresholds.py"
+        "6 - Visualization/run_visualizations.py"
     )
     
     for script in "${required_scripts[@]}"; do
@@ -396,28 +397,81 @@ train_single_model() {
     log SUCCESS "$model trained successfully"
 }
 
-# Step 4: Performance calculation with threshold optimization
+# Step 4: Threshold Calibration (after training, before testing)
+calibrate_thresholds() {
+    if [ "$SKIP_CALIBRATION" = true ]; then
+        log STEP "Skipping threshold calibration (--skip-calibration)"
+        return
+    fi
+    
+    log STEP "STEP 4/6: Threshold Calibration (Multi-Criteria Hierarchical)"
+    
+    # Convert comma-separated list to array
+    IFS=',' read -ra MODEL_ARRAY <<< "$MODELS"
+    
+    local calibrator="$PROJECT_DIR/3 - Single Model Performance Calculation/calibrate_thresholds.py"
+    
+    if [ ! -f "$calibrator" ]; then
+        log ERROR "Calibration script not found: $calibrator"
+        return 1
+    fi
+    
+    local failed_calibrations=0
+    
+    log INFO "Running multi-criteria threshold calibration..."
+    log INFO "Criteria: Tier 1 (Constraints) → Tier 2 (Balanced Precision) → Tier 3 (F1/Recall)"
+    echo ""
+    
+    # Build model list for calibrator
+    CALIB_MODELS=$(echo "$MODELS" | tr ',' ' ')
+    
+    for model in $CALIB_MODELS; do
+        log INFO "  • Calibrating $model thresholds..."
+        if "$VENV_PATH" "$calibrator" --model "$model" 2>&1 | grep -v "cuda\|CUDA\|GPU"; then
+            log SUCCESS "  ✓ $model calibration complete"
+        else
+            log WARN "  ✗ $model calibration failed"
+            ((failed_calibrations++))
+        fi
+        echo ""
+    done
+    
+    if [ $failed_calibrations -eq 0 ]; then
+        log SUCCESS "All threshold calibrations completed successfully"
+    else
+        log WARN "Threshold calibration completed with $failed_calibrations issue(s)"
+    fi
+    
+    # Show calibrated thresholds summary
+    local calib_file="$PROJECT_DIR/0 - DADS dataset extraction/results/calibrated_thresholds.json"
+    if [ -f "$calib_file" ]; then
+        log INFO "Calibrated thresholds saved to: $calib_file"
+    fi
+}
+
+# Step 5: Performance calculation with calibrated thresholds
 calculate_performance() {
     if [ "$SKIP_TESTING" = true ]; then
         log STEP "Skipping performance testing (--skip-testing)"
         return
     fi
     
-    log STEP "STEP 4/5: Performance Calculation (with threshold optimization)"
+    log STEP "STEP 5/6: Performance Evaluation (Using Calibrated Thresholds)"
     
     # Convert comma-separated list to array
     IFS=',' read -ra MODEL_ARRAY <<< "$MODELS"
     
-    local optimizer="$PROJECT_DIR/3 - Single Model Performance Calculation/optimize_threshold.py"
+    local calibrator="$PROJECT_DIR/3 - Single Model Performance Calculation/calibrate_thresholds.py"
     local tester="$PROJECT_DIR/3 - Single Model Performance Calculation/Universal_Perf_Tester.py"
     
-    if [ ! -f "$optimizer" ] || [ ! -f "$tester" ]; then
+    if [ ! -f "$calibrator" ] || [ ! -f "$tester" ]; then
         log ERROR "Required scripts not found"
         return 1
     fi
     
     local failed_tests=0
 
+    # LEGACY CLASS-AWARE WORKFLOW (deprecated but kept for compatibility)
     if [ "$USE_CLASS_AWARE_CAL" = true ]; then
         log STEP "Using class-aware calibration workflow"
 
@@ -484,48 +538,24 @@ calculate_performance() {
         return
     fi
 
-    # Default behaviour: per-model optimization then testing (legacy path)
+    # Test with calibrated thresholds on all splits
+    log INFO "Testing models with calibrated thresholds on all splits..."
     for model in "${MODEL_ARRAY[@]}"; do
-        log INFO "Processing $model..."
-
-        # Step 4.1: Optimize threshold on validation set
-        log INFO "  → Optimizing threshold on validation set..."
-        if "$VENV_PATH" "$optimizer" --model "$model" --min 0.3 --max 0.7 --step 0.05 2>&1 | \
-            grep -E "(Optimisation|Threshold|MEILLEUR|sauvegardés)" | grep -v "cuda\|CUDA\|GPU"; then
-            
-            # Read optimized threshold
-            if [ -f /tmp/optimized_threshold.txt ]; then
-                optimal_threshold=$(cat /tmp/optimized_threshold.txt)
-                log SUCCESS "  ✓ Optimal threshold for $model: $optimal_threshold"
-            else
-                log WARN "  ✗ Could not read optimal threshold, using 0.5"
-                optimal_threshold=0.5
-            fi
-        else
-            log WARN "  ✗ Threshold optimization failed for $model, using 0.5"
-            optimal_threshold=0.5
-            ((failed_tests++))
-        fi
-        
-        # Step 4.2: Test with optimal threshold on all splits
-        log INFO "  → Testing with threshold=$optimal_threshold on all splits..."
-            for split in train val test; do
-            log INFO "    • Testing on $split..."
+        for split in train val test; do
+            log INFO "  • Testing $model on $split..."
             
             if "$VENV_PATH" "$tester" \
                 --model "$model" \
                 --split "$split" \
-                --threshold "$optimal_threshold" \
                 --workers "$WORKERS" 2>&1 | \
-                grep -E "(Dataset|Test en cours|Accuracy|Résultats sauvegardés)" | \
+                grep -E "(Dataset|Test en cours|Loaded calibrated|Accuracy|Résultats sauvegardés)" | \
                 grep -v "cuda\|CUDA\|GPU" > /dev/null; then
-                log SUCCESS "    ✓ $model $split (t=$optimal_threshold)"
+                log SUCCESS "  ✓ $model $split"
             else
-                log WARN "    ✗ Test failed: $model $split"
+                log WARN "  ✗ Test failed: $model $split"
                 ((failed_tests++))
             fi
         done
-        
         echo ""
     done
 
@@ -536,28 +566,23 @@ calculate_performance() {
     fi
 }
 
-# Step 5: Visualizations (Enhanced Pipeline)
+# Step 6: Visualizations (Enhanced Pipeline)
 generate_visualizations() {
     if [ "$SKIP_VIZ" = true ]; then
         log STEP "Skipping visualizations (--skip-viz)"
         return
     fi
     
-    log STEP "STEP 5/5: Generating Enhanced Visualizations"
+    log STEP "STEP 6/6: Generating Visualizations"
     
-    local viz_script="$PROJECT_DIR/6 - Visualization/run_enhanced_visualizations.py"
+    local viz_script="$PROJECT_DIR/6 - Visualization/run_visualizations.py"
     
     if [ ! -f "$viz_script" ]; then
-        log WARN "run_enhanced_visualizations.py not found, falling back to run_all_visualizations.py"
-        viz_script="$PROJECT_DIR/6 - Visualization/run_all_visualizations.py"
-        
-        if [ ! -f "$viz_script" ]; then
-            log ERROR "No visualization script found"
-            return 1
-        fi
+        log ERROR "Visualization script not found: $viz_script"
+        return 1
     fi
     
-    log INFO "Running enhanced visualization pipeline (best thresholds only)..."
+    log INFO "Running unified visualization pipeline..."
     
     if ! "$VENV_PATH" "$viz_script" 2>&1 | grep -v "cuda\|CUDA\|GPU"; then
         log WARN "Visualization generation had warnings (non-fatal)"
@@ -618,6 +643,7 @@ main() {
     prepare_dataset
     extract_features
     train_models
+    calibrate_thresholds
     calculate_performance
     generate_visualizations
     

@@ -308,9 +308,14 @@ def plot_subcategory_heatmap(results, output_dir):
     # Plot
     fig, ax = plt.subplots(figsize=(max(14, len(all_subcats) * 0.8), max(8, len(models) * 0.6)))
     
+    # Calculer vmin/vmax dynamiquement basé sur les données réelles (ignore NaN)
+    valid_data = accuracy_matrix[~np.isnan(accuracy_matrix)]
+    vmin_dynamic = valid_data.min() if len(valid_data) > 0 else 0
+    vmax_dynamic = valid_data.max() if len(valid_data) > 0 else 1
+    
     sns.heatmap(accuracy_matrix, annot=True, fmt='.3f', cmap='RdYlGn', ax=ax,
                xticklabels=all_subcats, yticklabels=models, cbar_kws={'label': 'Accuracy'},
-               vmin=0, vmax=1, linewidths=0.5, linecolor='gray')
+               vmin=vmin_dynamic, vmax=vmax_dynamic, linewidths=0.5, linecolor='gray')
     
     ax.set_title('Accuracy Heatmap by Subcategory (Test Set - Best Thresholds)', fontweight='bold', fontsize=14)
     ax.set_xlabel('Subcategory', fontweight='bold')
