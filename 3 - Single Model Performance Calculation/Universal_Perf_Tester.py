@@ -54,7 +54,7 @@ def calculate_metrics(tp, tn, fp, fn):
 def main():
     parser = argparse.ArgumentParser(description='Test un modèle sur un dataset avec métriques ML complètes')
     parser.add_argument('--model', type=str, required=True, 
-                        choices=['CNN', 'RNN', 'CRNN', 'ATTENTION_CRNN'],
+                        choices=['CNN', 'RNN', 'CRNN', 'ATTENTION_CRNN', 'EFFICIENTNET', 'MOBILENET', 'CONFORMER', 'TCN'],
                         help='Modèle à tester')
     parser.add_argument('--split', type=str, required=True,
                         choices=['train', 'val', 'test'],
@@ -70,9 +70,14 @@ def main():
         'CNN': config.CNN_MODEL_PATH,
         'RNN': config.RNN_MODEL_PATH,
         'CRNN': config.CRNN_MODEL_PATH,
-        'ATTENTION_CRNN': config.ATTENTION_CRNN_MODEL_PATH
+        'ATTENTION_CRNN': config.ATTENTION_CRNN_MODEL_PATH,
+        'EFFICIENTNET': config.EFFICIENTNET_MODEL_PATH,
+        'MOBILENET': config.MOBILENET_MODEL_PATH,
+        'CONFORMER': config.CONFORMER_MODEL_PATH,
+        'TCN': config.TCN_MODEL_PATH
     }
     model_path = model_paths[args.model]
+    
     print(f"Chargement du modèle {args.model} depuis {model_path}")
     model = tf.keras.models.load_model(str(model_path), compile=False)
     
@@ -206,9 +211,10 @@ def main():
         if true_label != expected_cat:
             raise RuntimeError(f"Label incohérent pour {filename}: {true_label} vs {expected_cat}")
         X = np.array(mel, dtype=np.float32)
-        # Add channel dimension ONLY for CNN/CRNN/Attention (Conv2D needs 4D)
-        # RNN uses pure LSTM and expects 3D: (samples, time_steps, features)
-        if X.ndim == 3 and args.model != 'RNN':
+        # Add channel dimension ONLY for Conv2D models (CNN/CRNN/Attention/EfficientNet/MobileNet need 4D)
+        # RNN/TCN/Conformer use 1D processing and expect 3D: (samples, time_steps, features)
+        models_needing_3d = ['RNN', 'TCN', 'CONFORMER']
+        if X.ndim == 3 and args.model not in models_needing_3d:
             X = X[..., np.newaxis]
         filenames.append(filename)
         X_list.append(X)
@@ -225,7 +231,7 @@ def main():
         pass
 
     # Predict in batches
-    batch_size = 32
+    batch_size = getattr(config, 'BATCH_SIZE', 32)
     preds = model.predict(X_batch, batch_size=batch_size, verbose=1)
 
     # Convert model outputs to probabilities for class 1

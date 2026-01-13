@@ -1,11 +1,11 @@
 #!/bin/bash
 ################################################################################
-# Acoustic UAV Detection - Complete Pipeline (v3.1)
+# Acoustic UAV Detection - Complete Pipeline (v3.2)
 # 
 # Pipeline modernisé reflétant la nouvelle architecture:
 # 1. Préparation du dataset (master_setup_v2.py)
 # 2. Extraction des features MEL (Mel_Preprocess_and_Feature_Extract.py)
-# 3. Entraînement des modèles (CNN, RNN, CRNN, ATTENTION_CRNN)
+# 3. Entraînement des modèles (CNN, RNN, CRNN, ATTENTION_CRNN, EFFICIENTNET, MOBILENET, CONFORMER, TCN)
 # 4. Calibration des thresholds (calibrate_thresholds.py - multi-critères)
 # 5. Évaluation des performances (Universal_Perf_Tester.py)
 # 6. Visualisations (run_visualizations.py)
@@ -20,7 +20,7 @@
 #   --skip-training       Skip model training (reuse existing models)
 #   --skip-calibration    Skip threshold calibration (use existing thresholds)
 #   --skip-testing        Skip performance testing (reuse existing results)
-#   --models MODEL1,MODEL2  Train only specific models (CNN,RNN,CRNN,ATTENTION_CRNN)
+#   --models MODEL1,MODEL2  Train only specific models (CNN,RNN,CRNN,ATTENTION_CRNN,EFFICIENTNET,MOBILENET,CONFORMER,TCN)
 #   --parallel            Train models in parallel (faster but more CPU)
 #   --skip-viz            Skip visualizations
 #   --use-class-aware-calibration  Use legacy class-aware calibration (deprecated)
@@ -51,7 +51,7 @@ SKIP_DATASET=false
 SKIP_FEATURES=false
 SKIP_TRAINING=false
 SKIP_TESTING=false
-MODELS="CNN,RNN,CRNN,ATTENTION_CRNN"
+MODELS="CNN,RNN,CRNN,ATTENTION_CRNN,EFFICIENTNET,MOBILENET,CONFORMER,TCN"
 PARALLEL=false
 THRESHOLDS="0.5"
 SKIP_VIZ=false
@@ -255,6 +255,10 @@ check_prerequisites() {
         "2 - Model Training/RNN_Trainer.py"
         "2 - Model Training/CRNN_Trainer.py"
         "2 - Model Training/Attention_CRNN_Trainer.py"
+        "2 - Model Training/EfficientNet_Trainer.py"
+        "2 - Model Training/MobileNet_Trainer.py"
+        "2 - Model Training/Conformer_Trainer.py"
+        "2 - Model Training/TCN_Trainer.py"
         "3 - Single Model Performance Calculation/Universal_Perf_Tester.py"
         "3 - Single Model Performance Calculation/calibrate_thresholds.py"
         "6 - Visualization/run_visualizations.py"
@@ -380,6 +384,18 @@ train_single_model() {
             ;;
         ATTENTION_CRNN)
             trainer="Attention_CRNN_Trainer.py"
+            ;;
+        EFFICIENTNET)
+            trainer="EfficientNet_Trainer.py"
+            ;;
+        MOBILENET)
+            trainer="MobileNet_Trainer.py"
+            ;;
+        CONFORMER)
+            trainer="Conformer_Trainer.py"
+            ;;
+        TCN)
+            trainer="TCN_Trainer.py"
             ;;
         *)
             log ERROR "Unknown model: $model"

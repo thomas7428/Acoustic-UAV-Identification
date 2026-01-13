@@ -241,17 +241,26 @@ def get_loss_function(loss_type='bce', **kwargs):
 
 def get_metrics():
     """
-    Get comprehensive metrics for binary classification.
+    Get standard metrics for binary classification.
     
     Returns:
         List of metrics to pass to model.compile()
     """
-    # Wrap metrics so they operate on the positive-class probability when
-    # the model outputs a 2-class softmax (y_pred shape = [batch, 2]).
-    # This avoids shape mismatches between sparse/categorical labels and
-    # binary metrics (TP/FP/TN/FN, Precision, Recall, AUC) used for the
-    # drone-positive class.
+    # Simple standard metrics that work with scalar labels (batch,)
+    # and sigmoid outputs (batch, 1)
+    return [
+        'accuracy',
+        keras.metrics.Precision(name='precision'),
+        keras.metrics.Recall(name='recall'),
+        keras.metrics.AUC(name='auc')
+    ]
 
+
+def get_metrics_OLD_COMPLEX():
+    """
+    DEPRECATED: Complex metrics with one-hot handling (kept for reference).
+    Use get_metrics() instead for simpler, more robust metrics.
+    """
     class _PositiveClassMetric(keras.metrics.Metric):
         """Wrapper metric that delegates to a binary metric but feeds it
         the positive-class probability extracted from a 2-class softmax.

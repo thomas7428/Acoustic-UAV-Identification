@@ -61,6 +61,26 @@ ATTENTION_CRNN_MODEL_PATH = MODELS_DIR / "attention_crnn_model.keras"
 ATTENTION_CRNN_HISTORY_PATH = RESULTS_DIR / "attention_crnn_history.csv"
 ATTENTION_CRNN_ACC_PATH = RESULTS_DIR / "attention_crnn_accuracy.json"
 
+# EfficientNet-B0 Model paths
+EFFICIENTNET_MODEL_PATH = MODELS_DIR / "efficientnet_model.keras"
+EFFICIENTNET_HISTORY_PATH = RESULTS_DIR / "efficientnet_history.csv"
+EFFICIENTNET_ACC_PATH = RESULTS_DIR / "efficientnet_accuracy.json"
+
+# MobileNet-Audio Model paths
+MOBILENET_MODEL_PATH = MODELS_DIR / "mobilenet_model.keras"
+MOBILENET_HISTORY_PATH = RESULTS_DIR / "mobilenet_history.csv"
+MOBILENET_ACC_PATH = RESULTS_DIR / "mobilenet_accuracy.json"
+
+# Conformer Model paths
+CONFORMER_MODEL_PATH = MODELS_DIR / "conformer_model.keras"
+CONFORMER_HISTORY_PATH = RESULTS_DIR / "conformer_history.csv"
+CONFORMER_ACC_PATH = RESULTS_DIR / "conformer_accuracy.json"
+
+# TCN Model paths
+TCN_MODEL_PATH = MODELS_DIR / "tcn_model.keras"
+TCN_HISTORY_PATH = RESULTS_DIR / "tcn_history.csv"
+TCN_ACC_PATH = RESULTS_DIR / "tcn_accuracy.json"
+
 # All models accuracy path
 ALL_MODELS_ACC_PATH = RESULTS_DIR / "all_model_acc.json"
 
@@ -157,6 +177,12 @@ NUM_SEGMENTS = 1
 # Parallel processing for augmentation
 import os as _os
 AUGMENTATION_MAX_WORKERS = int(_os.environ.get('AUGMENTATION_WORKERS', _os.cpu_count() or 4))
+
+# Training parameters (centralized)
+MIN_EPOCHS = 10  # Minimum epochs before early stopping can trigger
+MAX_EPOCHS = 1000  # Maximum epochs limit
+BATCH_SIZE = 128  # Default batch size for training
+LEARNING_RATE = 0.0001  # Default learning rate
 
 # WAV write subtype used by augmentation/save routines (must be a valid subtype for soundfile)
 # Examples: 'PCM_16', 'FLOAT'

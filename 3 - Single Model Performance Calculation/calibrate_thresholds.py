@@ -245,7 +245,11 @@ def load_validation_predictions(model_name):
         'CNN': config.CNN_MODEL_PATH,
         'RNN': config.RNN_MODEL_PATH,
         'CRNN': config.CRNN_MODEL_PATH,
-        'ATTENTION_CRNN': config.ATTENTION_CRNN_MODEL_PATH
+        'ATTENTION_CRNN': config.ATTENTION_CRNN_MODEL_PATH,
+        'EFFICIENTNET': config.EFFICIENTNET_MODEL_PATH,
+        'MOBILENET': config.MOBILENET_MODEL_PATH,
+        'CONFORMER': config.CONFORMER_MODEL_PATH,
+        'TCN': config.TCN_MODEL_PATH
     }
     
     model_path = model_paths.get(model_name.upper())
@@ -277,14 +281,16 @@ def load_validation_predictions(model_name):
     print(f"Validation samples: {len(y_val)}")
     print(f"Feature shape: {X_val.shape}")
     
-    # Add channel dimension for CNN/CRNN/Attention (Conv2D needs 4D)
-    if X_val.ndim == 3 and model_name.upper() != 'RNN':
+    # Add channel dimension for Conv2D models (CNN/CRNN/Attention/EfficientNet/MobileNet need 4D)
+    # RNN/TCN/Conformer use 1D processing and expect 3D
+    models_needing_3d = ['RNN', 'TCN', 'CONFORMER']
+    if X_val.ndim == 3 and model_name.upper() not in models_needing_3d:
         X_val = X_val[..., np.newaxis]
         print(f"Added channel dimension: {X_val.shape}")
     
     # Predict
     print("Generating predictions...")
-    predictions = model.predict(X_val, batch_size=32, verbose=1)
+    predictions = model.predict(X_val, batch_size=32, verbose=0)
     
     # Extract probability for class 1
     if predictions.ndim > 1 and predictions.shape[1] > 1:
@@ -342,7 +348,7 @@ def save_calibration_results(calibration_data, output_path):
 
 def main():
     parser = argparse.ArgumentParser(description='Calibrate classification thresholds')
-    parser.add_argument('--model', type=str, choices=['CNN', 'RNN', 'CRNN', 'ATTENTION_CRNN'],
+    parser.add_argument('--model', type=str, choices=['CNN', 'RNN', 'CRNN', 'ATTENTION_CRNN', 'EFFICIENTNET', 'MOBILENET', 'CONFORMER', 'TCN'],
                         help='Model to calibrate')
     parser.add_argument('--all-models', action='store_true',
                         help='Calibrate all models')
@@ -362,7 +368,7 @@ def main():
     
     # Déterminer les modèles à calibrer
     if args.all_models:
-        models = ['CNN', 'RNN', 'CRNN', 'ATTENTION_CRNN']
+        models = ['CNN', 'RNN', 'CRNN', 'ATTENTION_CRNN', 'EFFICIENTNET', 'MOBILENET', 'CONFORMER', 'TCN']
     else:
         models = [args.model]
     

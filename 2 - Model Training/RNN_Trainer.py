@@ -124,10 +124,10 @@ if __name__ == "__main__":
                        help='Focal loss alpha parameter (default: 0.60 - balanced)')
     parser.add_argument('--focal_gamma', type=float, default=2.0,
                        help='Focal loss gamma parameter (default: 2.0 - focus on hard examples)')
-    parser.add_argument('--min_epochs', type=int, default=50,
-                       help='Minimum number of epochs before early stopping (default: 50)')
-    parser.add_argument('--max_epochs', type=int, default=1000,
-                       help='Maximum number of epochs to run (default: 1000)')
+    parser.add_argument('--min_epochs', type=int, default=config.MIN_EPOCHS,
+                       help='Minimum number of epochs before early stopping (default: from config.py)')
+    parser.add_argument('--max_epochs', type=int, default=config.MAX_EPOCHS,
+                       help='Maximum number of epochs to run (default: from config.py)')
     parser.add_argument('--stratified-validation', action='store_true',
                        help='Enable distance-stratified validation (evaluates each distance separately)')
     parser.add_argument('--use_class_weight', action='store_true',

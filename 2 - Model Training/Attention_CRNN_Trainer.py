@@ -246,7 +246,7 @@ def main():
     parser.add_argument('--min_epochs', type=int, default=50, help='Minimum epochs before early stopping')
     parser.add_argument('--stratified-validation', action='store_true', help='Enable distance-stratified validation')
     parser.add_argument('--use_class_weight', action='store_true', help='Compute class weights and apply sample_weight to fit')
-    parser.add_argument('--max_epochs', type=int, default=1000, help='Maximum number of epochs to run (default: 1000)')
+    parser.add_argument('--max_epochs', type=int, default=config.MAX_EPOCHS, help='Maximum number of epochs to run (default: from config.py)')
     parser.add_argument('--use_dynamic_weight', action='store_true', help='Enable dynamic positive-class weight scheduler (updates each epoch)')
     parser.add_argument('--dyn_base', type=float, default=1.0, help='Base weight multiplier for dynamic scheduler')
     parser.add_argument('--dyn_beta', type=float, default=0.8, help='EMA beta for dynamic scheduler (smoothing)')

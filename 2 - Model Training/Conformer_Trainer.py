@@ -1,0 +1,299 @@
+import json
+import numpy as np
+import argparse
+from sklearn.model_selection import train_test_split
+from sklearn.utils.class_weight import compute_class_weight
+import tensorflow as tf
+import tensorflow.keras as keras
+from tensorflow.keras import layers
+import pandas as pd
+from datetime import datetime
+from termcolor import colored
+import sys
+from pathlib import Path
+
+# Optimize CPU threads
+tf.config.threading.set_intra_op_parallelism_threads(12)
+tf.config.threading.set_inter_op_parallelism_threads(4)
+
+# Enable GPU memory growth
+gpus = tf.config.list_physical_devices('GPU')
+if gpus:
+    try:
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+    except RuntimeError as e:
+        print(f"GPU memory growth config failed: {e}")
+
+# Add project root to path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+import config
+
+# Import universal feature loader
+sys.path.insert(0, str(Path(__file__).parent.parent / 'tools'))
+from feature_loader import load_mel_features
+
+# Import loss functions
+from loss_functions import get_loss_function, get_metrics
+
+# Timer
+startTime = datetime.now()
+
+# Paths
+MODEL_SAVE = config.PROJECT_ROOT / "0 - DADS dataset extraction" / "saved_models" / "conformer_model.keras"
+HISTORY_SAVE = config.RESULTS_DIR / "conformer_history.csv"
+ACC_SAVE = config.RESULTS_DIR / "conformer_accuracy.json"
+
+# Training hyperparams
+BATCH_SIZE = getattr(config, 'BATCH_SIZE', 32)
+LEARNING_RATE = getattr(config, 'LEARNING_RATE', 0.0001)
+
+
+def feed_forward_module(x, dim, expansion_factor=4, dropout=0.1, training=False, name_prefix='ffn'):
+    """Feed-forward module with GLU activation (Functional API)"""
+    inner_dim = dim * expansion_factor
+    
+    # Layer norm
+    x = layers.LayerNormalization(name=f'{name_prefix}_ln')(x)
+    
+    # Dense with GLU
+    x = layers.Dense(inner_dim * 2, name=f'{name_prefix}_dense1')(x)
+    
+    # GLU activation: split and multiply
+    x_gate = layers.Lambda(lambda x: x[:, :, :inner_dim], name=f'{name_prefix}_gate')(x)
+    x_linear = layers.Lambda(lambda x: x[:, :, inner_dim:], name=f'{name_prefix}_linear')(x)
+    x_gate = layers.Activation('gelu', name=f'{name_prefix}_gelu')(x_gate)
+    x = layers.Multiply(name=f'{name_prefix}_glu')([x_gate, x_linear])
+    
+    x = layers.Dropout(dropout, name=f'{name_prefix}_drop1')(x, training=training)
+    x = layers.Dense(dim, name=f'{name_prefix}_dense2')(x)
+    x = layers.Dropout(dropout, name=f'{name_prefix}_drop2')(x, training=training)
+    
+    return x
+
+
+def convolution_module(x, dim, kernel_size=31, dropout=0.1, training=False, name_prefix='conv'):
+    """Depthwise convolution module (Functional API)"""
+    # Layer norm
+    x = layers.LayerNormalization(name=f'{name_prefix}_ln')(x)
+    
+    # Pointwise expansion with GLU
+    x = layers.Dense(dim * 2, name=f'{name_prefix}_pw1')(x)
+    
+    # GLU activation
+    x_gate = layers.Lambda(lambda x: x[:, :, :dim], name=f'{name_prefix}_gate')(x)
+    x_linear = layers.Lambda(lambda x: x[:, :, dim:], name=f'{name_prefix}_linear')(x)
+    x_linear = layers.Activation('sigmoid', name=f'{name_prefix}_sigmoid')(x_linear)
+    x = layers.Multiply(name=f'{name_prefix}_glu')([x_gate, x_linear])
+    
+    # Depthwise convolution
+    x = layers.DepthwiseConv1D(kernel_size=kernel_size, padding='same', depth_multiplier=1, name=f'{name_prefix}_dw')(x)
+    x = layers.BatchNormalization(name=f'{name_prefix}_bn')(x, training=training)
+    x = layers.Activation('swish', name=f'{name_prefix}_swish')(x)
+    
+    # Pointwise projection
+    x = layers.Dense(dim, name=f'{name_prefix}_pw2')(x)
+    x = layers.Dropout(dropout, name=f'{name_prefix}_drop')(x, training=training)
+    
+    return x
+
+
+def conformer_block(x, dim, num_heads=4, ffn_expansion=4, conv_kernel_size=31, dropout=0.1, training=False, block_id=0):
+    """
+    Conformer block: Macaron-style FFN + MHSA + Convolution + FFN (Functional API)
+    """
+    # First half-step FFN (scaled by 0.5)
+    ffn1_out = feed_forward_module(x, dim, ffn_expansion, dropout, training, name_prefix=f'block{block_id}_ffn1')
+    ffn1_out = layers.Lambda(lambda x: 0.5 * x, name=f'block{block_id}_ffn1_scale')(ffn1_out)
+    x = layers.Add(name=f'block{block_id}_add1')([x, ffn1_out])
+    
+    # Multi-head self-attention
+    x_norm = layers.LayerNormalization(name=f'block{block_id}_mha_ln')(x)
+    mha_out = layers.MultiHeadAttention(
+        num_heads=num_heads,
+        key_dim=dim // num_heads,
+        dropout=dropout,
+        name=f'block{block_id}_mha'
+    )(x_norm, x_norm, training=training)
+    mha_out = layers.Dropout(dropout, name=f'block{block_id}_mha_drop')(mha_out, training=training)
+    x = layers.Add(name=f'block{block_id}_add2')([x, mha_out])
+    
+    # Convolution module
+    conv_out = convolution_module(x, dim, conv_kernel_size, dropout, training, name_prefix=f'block{block_id}_conv')
+    x = layers.Add(name=f'block{block_id}_add3')([x, conv_out])
+    
+    # Second half-step FFN (scaled by 0.5)
+    ffn2_out = feed_forward_module(x, dim, ffn_expansion, dropout, training, name_prefix=f'block{block_id}_ffn2')
+    ffn2_out = layers.Lambda(lambda x: 0.5 * x, name=f'block{block_id}_ffn2_scale')(ffn2_out)
+    x = layers.Add(name=f'block{block_id}_add4')([x, ffn2_out])
+    
+    # Final layer norm
+    x = layers.LayerNormalization(name=f'block{block_id}_ln_final')(x)
+    
+    return x
+
+
+def build_model(input_shape=(44, 90, 1), num_conformer_blocks=4):
+    """
+    Build Conformer model (CNN + Transformer hybrid)
+    Combines local feature extraction (CNN) with global context (Transformer)
+    """
+    inputs = layers.Input(shape=input_shape)
+    
+    # Reshape for 1D processing (time as sequence, frequency as features)
+    # From (44, 90, 1) to (90, 44)
+    x = layers.Reshape((input_shape[1], input_shape[0]))(inputs)
+    
+    # Subsampling layer (reduce temporal dimension)
+    x = layers.Conv1D(filters=144, kernel_size=3, strides=2, padding='same')(x)
+    x = layers.Activation('relu')(x)
+    x = layers.Conv1D(filters=144, kernel_size=3, strides=2, padding='same')(x)
+    x = layers.Activation('relu')(x)
+    
+    # Linear projection to model dimension
+    model_dim = 144
+    x = layers.Dense(model_dim)(x)
+    
+    # Stack of Conformer blocks
+    for i in range(num_conformer_blocks):
+        x = conformer_block(
+            x,
+            dim=model_dim,
+            num_heads=4,
+            ffn_expansion=4,
+            conv_kernel_size=31,
+            dropout=0.1,
+            training=True,
+            block_id=i
+        )
+    
+    # Global average pooling
+    x = layers.GlobalAveragePooling1D()(x)
+    
+    # Classification head
+    x = layers.Dense(128, activation='relu')(x)
+    x = layers.Dropout(0.2)(x)
+    x = layers.Dense(64, activation='relu')(x)
+    x = layers.Dropout(0.1)(x)
+    outputs = layers.Dense(1, activation='sigmoid')(x)
+    
+    model = keras.Model(inputs=inputs, outputs=outputs, name='Conformer_Audio')
+    return model
+
+
+def load_data():
+    """Load training and validation data"""
+    print(f"[INFO] Loading validation features (NPZ/JSON auto-detect)")
+    val_mels, val_labels, _ = load_mel_features('val')
+    if len(val_mels) == 0:
+        raise RuntimeError(f"No validation MEL features found")
+
+    print(f"[INFO] Loading training features (NPZ/JSON auto-detect)")
+    train_mels, train_labels, _ = load_mel_features('train')
+    if len(train_mels) == 0:
+        raise RuntimeError(f"No training MEL features found")
+    
+    print(f"[INFO] Loaded {len(train_mels)} train samples, {len(val_mels)} val samples")
+    return train_mels, train_labels, val_mels, val_labels
+
+
+def prepare_datasets():
+    """Prepare datasets with proper dimensions"""
+    X_train, y_train, X_validation, y_validation = load_data()
+    
+    X_test = X_validation
+    y_test = y_validation
+
+    # Add channel dimension
+    X_train = X_train[..., np.newaxis]
+    X_validation = X_validation[..., np.newaxis]
+    X_test = X_test[..., np.newaxis]
+
+    return X_train, X_validation, X_test, y_train, y_validation, y_test
+
+
+if __name__ == "__main__":
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--loss', type=str, default='bce',
+                        choices=['bce', 'weighted_bce', 'focal', 'recall_focused'],
+                        help='Loss function to use')
+    parser.add_argument('--epochs', type=int, default=config.MAX_EPOCHS, help='Number of epochs')
+    parser.add_argument('--blocks', type=int, default=4, help='Number of Conformer blocks')
+    args = parser.parse_args()
+
+    # Prepare datasets
+    X_train, X_validation, X_test, y_train, y_validation, y_test = prepare_datasets()
+
+    # Build model
+    input_shape = (X_train.shape[1], X_train.shape[2], 1)
+    model = build_model(input_shape, num_conformer_blocks=args.blocks)
+
+    # Get loss and metrics
+    loss_fn = get_loss_function(args.loss)
+    metrics = get_metrics()
+
+    # Compile
+    optimizer = keras.optimizers.Adam(learning_rate=LEARNING_RATE)
+    model.compile(optimizer=optimizer, loss=loss_fn, metrics=metrics)
+
+    # Print model summary
+    print("\n" + "="*80)
+    print("CONFORMER (CNN + TRANSFORMER HYBRID) MODEL")
+    print("="*80)
+    model.summary()
+    print("="*80 + "\n")
+
+    # Compute class weights
+    class_weights_array = compute_class_weight('balanced', classes=np.unique(y_train), y=y_train)
+    class_weights = dict(enumerate(class_weights_array))
+    print(f"[INFO] Class weights: {class_weights}")
+
+    # Callbacks
+    early_stop = keras.callbacks.EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
+    reduce_lr = keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=1e-7)
+
+    # Train
+    print(f"\n[INFO] Training Conformer with {args.loss} loss, batch_size={BATCH_SIZE}, {args.blocks} blocks")
+    history = model.fit(
+        X_train, y_train,
+        validation_data=(X_validation, y_validation),
+        batch_size=BATCH_SIZE,
+        epochs=args.epochs,
+        class_weight=class_weights,
+        callbacks=[early_stop, reduce_lr],
+        verbose=2
+    )
+
+    # Save model
+    MODEL_SAVE.parent.mkdir(parents=True, exist_ok=True)
+    model.save(MODEL_SAVE)
+    print(f"\n[SUCCESS] Model saved: {MODEL_SAVE}")
+
+    # Save history
+    hist_df = pd.DataFrame(history.history)
+    HISTORY_SAVE.parent.mkdir(parents=True, exist_ok=True)
+    hist_df.to_csv(HISTORY_SAVE, index=False)
+    print(f"[SUCCESS] History saved: {HISTORY_SAVE}")
+
+    # Evaluate on test set
+    test_results = model.evaluate(X_test, y_test, verbose=0)
+    test_loss = test_results[0]
+    test_acc = test_results[1] if len(test_results) > 1 else 0.0
+    print(f"\n[RESULTS] Test Loss: {test_loss:.4f}, Test Accuracy: {test_acc:.4f}")
+
+    # Save accuracy
+    accuracy_data = {
+        "test_loss": float(test_loss),
+        "test_accuracy": float(test_acc),
+        "training_time": str(datetime.now() - startTime),
+        "loss_function": args.loss,
+        "batch_size": BATCH_SIZE,
+        "learning_rate": LEARNING_RATE,
+        "num_blocks": args.blocks
+    }
+    with open(ACC_SAVE, 'w') as f:
+        json.dump(accuracy_data, f, indent=2)
+    print(f"[SUCCESS] Accuracy saved: {ACC_SAVE}")
+
+    print(f"\n[DONE] Total training time: {datetime.now() - startTime}")
