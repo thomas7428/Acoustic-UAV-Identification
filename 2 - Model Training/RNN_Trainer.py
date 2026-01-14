@@ -95,19 +95,18 @@ def prepare_datasets():
 
 def build_model(input_shape):
     # Create model.
+    # NOTE: LSTM layers cannot use AMD GPU due to ROCm MIOpen limitations
+    # This model must run on CPU - the pipeline automatically handles this
     model = keras.Sequential()
 
     # 3 Bidirectional LSTM layers
-    # input_shape only needed on first layer - subsequent layers infer automatically
     model.add(keras.layers.Bidirectional(keras.layers.LSTM(100, return_sequences=True), input_shape=input_shape))
     model.add(keras.layers.Bidirectional(keras.layers.LSTM(100, return_sequences=True)))
     model.add(keras.layers.Bidirectional(keras.layers.LSTM(100)))
 
-    # Dense layer
+    # Dense layers
     model.add(keras.layers.Dense(100, activation='relu'))
     model.add(keras.layers.Dropout(0.5))
-
-    # Output layer
     model.add(keras.layers.Dense(2, activation='softmax'))
 
     return model

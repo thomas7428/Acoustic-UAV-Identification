@@ -1,0 +1,11 @@
+FROM docker.io/rocm/tensorflow:latest
+
+# Install additional Python dependencies
+COPY container_requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt && rm /tmp/requirements.txt
+
+# Set working directory
+WORKDIR /workspace
+
+# Set HSA override for RX7600 (gfx1102)
+ENV HSA_OVERRIDE_GFX_VERSION=11.0.2

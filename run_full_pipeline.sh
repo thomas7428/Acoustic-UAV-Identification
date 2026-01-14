@@ -237,9 +237,108 @@ print_header() {
     echo ""
 }
 
+# Check GPU support
+check_gpu_support() {
+    GPU_AVAILABLE=false
+    ROCM_IMAGE="acoustic-uav-rocm"
+    GFX_VERSION="11.0.2"
+    
+    # Use absolute paths for podman and rocm-smi (nohup loses PATH)
+    PODMAN_BIN="/usr/bin/podman"
+    ROCM_SMI_BIN="/usr/bin/rocm-smi"
+    
+    # Check if podman and rocm-smi are available
+    if [ -x "$PODMAN_BIN" ] && [ -x "$ROCM_SMI_BIN" ]; then
+        # Check if custom image is present
+        if $PODMAN_BIN images | grep -q "acoustic-uav-rocm"; then
+            # Check if GPU is detected
+            if $ROCM_SMI_BIN --showproductname &> /dev/null; then
+                GPU_AVAILABLE=true
+                log SUCCESS "GPU AMD détecté - Entraînement avec accélération GPU activé"
+            fi
+        elif $PODMAN_BIN images | grep -q "rocm/tensorflow"; then
+            log INFO "Image de base présente mais pas l'image personnalisée"
+            log INFO "Construction de l'image personnalisée..."
+            if $PODMAN_BIN build -t acoustic-uav-rocm -f "$PROJECT_DIR/Dockerfile.rocm" "$PROJECT_DIR" &>> "$LOG_FILE"; then
+                ROCM_IMAGE="acoustic-uav-rocm"
+                if $ROCM_SMI_BIN --showproductname &> /dev/null; then
+                    GPU_AVAILABLE=true
+                    log SUCCESS "GPU AMD détecté - Entraînement avec accélération GPU activé"
+                fi
+            else
+                log WARN "Échec de construction de l'image - Entraînement sur CPU"
+            fi
+        else
+            log INFO "Image TensorFlow-ROCm non trouvée - Entraînement sur CPU uniquement"
+            log INFO "Pour activer le GPU: ./gpu.sh --test"
+        fi
+    else
+        log WARN "GPU tools not found ($PODMAN_BIN or $ROCM_SMI_BIN) - Training on CPU only"
+    fi
+    
+    if [ "$GPU_AVAILABLE" = false ]; then
+        log INFO "Entraînement sur CPU uniquement"
+    fi
+}
+
+# Run python script with GPU if available
+run_python() {
+    local script="$1"
+    shift  # Remove first argument, keep the rest
+    local args="$@"
+    
+    # RNN/LSTM models cannot use AMD GPU due to ROCm MIOpen limitations - force CPU
+    local force_cpu=false
+    if [[ "$script" =~ (RNN_Trainer|CRNN_Trainer|Attention_CRNN_Trainer) ]]; then
+        force_cpu=true
+        log INFO "⚠️  Modèle LSTM - CPU uniquement (limitation ROCm MIOpen)"
+    fi
+    
+    if [ "$GPU_AVAILABLE" = true ] && [ "$force_cpu" = false ]; then
+        log INFO "Exécution avec GPU: $script"
+        /usr/bin/podman run --rm \
+            --device=/dev/kfd \
+            --device=/dev/dri \
+            --group-add video \
+            --security-opt seccomp=unconfined \
+            --security-opt label=disable \
+            -v "$PROJECT_DIR:/workspace:rw" \
+            -w "/workspace" \
+            -e HSA_OVERRIDE_GFX_VERSION="$GFX_VERSION" \
+            "$ROCM_IMAGE" \
+            python3 "/workspace/$script" $args
+    else
+        "$VENV_PATH" "$script" $args
+    fi
+}
+
+# Print header
+print_header() {
+    echo -e "${MAGENTA}"
+    echo "================================================================================"
+    echo "  🚀 ACOUSTIC UAV DETECTION - FULL PIPELINE V3.0"
+    echo "================================================================================"
+    echo -e "${NC}"
+    log INFO "Timestamp: $TIMESTAMP"
+    log INFO "Log File: $LOG_FILE"
+    log INFO "Skip Dataset: $SKIP_DATASET"
+    log INFO "Skip Features: $SKIP_FEATURES"
+    log INFO "Skip Training: $SKIP_TRAINING"
+    log INFO "Skip Testing: $SKIP_TESTING"
+    log INFO "Models: $MODELS"
+    log INFO "Parallel: $PARALLEL"
+    log INFO "Thresholds: $THRESHOLDS"
+    log INFO "Skip Viz: $SKIP_VIZ"
+    log INFO "Trainer Flags: $TRAINER_FLAGS"
+    echo ""
+}
+
 # Check prerequisites
 check_prerequisites() {
     log STEP "Checking prerequisites..."
+    
+    # Check for GPU support
+    check_gpu_support
     
     if [ ! -f "$VENV_PATH" ]; then
         log ERROR "Python venv not found: $VENV_PATH"
@@ -370,8 +469,6 @@ train_single_model() {
     
     log INFO "Training $model..."
     
-    cd "$PROJECT_DIR/2 - Model Training"
-    
     case $model in
         CNN)
             trainer="CNN_Trainer.py"
@@ -404,12 +501,11 @@ train_single_model() {
     esac
     
     # Forward any trainer-specific flags (e.g. --min_epochs, --max_epochs, --use_dynamic_weight, --dyn_min_w, --dyn_max_w, --batch_size)
-    if ! eval "\"$VENV_PATH\" \"$trainer\" $TRAINER_FLAGS"; then
+    if ! run_python "2 - Model Training/$trainer" $TRAINER_FLAGS; then
         log ERROR "$model training failed"
         return 1
     fi
     
-    cd "$PROJECT_DIR"
     log SUCCESS "$model trained successfully"
 }
 

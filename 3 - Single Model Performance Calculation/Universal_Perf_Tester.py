@@ -23,6 +23,17 @@ import re
 from collections import defaultdict
 from datetime import datetime
 
+# Some saved models include Python `Lambda` layers. Keras disallows deserializing
+# arbitrary Python lambdas by default for safety. Enable unsafe deserialization
+# when running trusted, local evaluation to allow loading such artifacts.
+try:
+    import keras
+    keras.config.enable_unsafe_deserialization()
+except Exception:
+    # If the keras package doesn't expose the function (older/newer variants),
+    # continue and let load_model raise its usual error.
+    pass
+
 # Import feature loader for NPZ support
 sys.path.insert(0, str(Path(__file__).parent.parent / 'tools'))
 from feature_loader import load_mel_features

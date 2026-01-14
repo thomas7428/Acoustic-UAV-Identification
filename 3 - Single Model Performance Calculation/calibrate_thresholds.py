@@ -239,6 +239,15 @@ def load_validation_predictions(model_name):
     Utilise les features NPZ si disponibles.
     """
     import tensorflow as tf
+    # Allow loading models that include Python `Lambda` layers when running
+    # in this trusted local environment. Keras blocks unsafe deserialization
+    # by default; enable it here so calibrations/tests succeed on saved
+    # artifacts that contain lambdas.
+    try:
+        import keras
+        keras.config.enable_unsafe_deserialization()
+    except Exception:
+        pass
     
     # Charger le modèle
     model_paths = {

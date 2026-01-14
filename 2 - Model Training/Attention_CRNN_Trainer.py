@@ -198,12 +198,12 @@ def build_attention_crnn(input_shape=(44, 90), num_classes=2):
     # ============================================================
     
     x = layers.Bidirectional(
-        layers.LSTM(128, return_sequences=True, dropout=0.3, name='lstm1'),
+        layers.LSTM(128, return_sequences=True, dropout=0.3, use_cudnn=False, name='lstm1'),
         name='bi_lstm1'
     )(x)
     
     x = layers.Bidirectional(
-        layers.LSTM(64, return_sequences=False, dropout=0.3, name='lstm2'),
+        layers.LSTM(64, return_sequences=False, dropout=0.3, use_cudnn=False, name='lstm2'),
         name='bi_lstm2'
     )(x)
     

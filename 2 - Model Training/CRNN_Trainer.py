@@ -116,7 +116,7 @@ def build_model(input_shape):
     model.add(keras.layers.Reshape((model.output_shape[1], resize_shape)))
 
     # RNN layer.
-    model.add(keras.layers.LSTM(32, input_shape=input_shape, return_sequences=True))
+    model.add(keras.layers.LSTM(32, input_shape=input_shape, return_sequences=True, use_cudnn=False))
 
     # Flatten the output and feed into dense layer.
     model.add(keras.layers.Flatten())
