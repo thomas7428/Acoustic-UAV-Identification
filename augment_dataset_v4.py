@@ -4,6 +4,7 @@
 import json
 from pathlib import Path
 import argparse
+from augment.v4.writer import SplitWriter
 from augment.v4.rng import rng_for_key, seed_from_key
 from augment.v4.io import write_wav, append_jsonl_line, truncate_jsonl, write_summary
 from augment.v4.schema import SampleMeta
@@ -18,10 +19,37 @@ def run_smoke(config_path, out_dir, dry_run=False):
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
-    # stream/summary paths
-    stream = out / 'augmentation_samples.jsonl'
-    summary = out / 'augmentation_summary.json'
-    truncate_jsonl(stream)
+    # dataset layout: expected out is datasets/<dataset_id>
+    # load splits.json if present
+    splits_map = {}
+    splits_path = out / 'splits.json'
+    if splits_path.exists():
+        try:
+            splits_map = json.loads(splits_path.read_text(encoding='utf-8'))
+        except Exception:
+            splits_map = {}
+
+    # writers cache per split
+    writers = {}
+
+    # create combined top-level stream for compatibility
+    combined_stream = out / 'augmentation_samples.jsonl'
+    # truncate if exists
+    try:
+        combined_stream.write_text('', encoding='utf-8')
+    except Exception:
+        pass
+
+    def get_writer_for_sample(label, drone_file_path, seed_key):
+        # determine split: if drone source present, lookup by stem; else fallback to 'train'
+        split = 'train'
+        if drone_file_path:
+            src = Path(drone_file_path).stem
+            split = splits_map.get(src, 'train')
+        # create writer if missing
+        if split not in writers:
+            writers[split] = SplitWriter(out / split)
+        return writers[split], split
 
     sr = cfg.get('audio_parameters', {}).get('sample_rate', 16000)
     duration_s = float(cfg.get('audio_parameters', {}).get('duration_s', 1.0))
@@ -172,10 +200,12 @@ def run_smoke(config_path, out_dir, dry_run=False):
             # post
             final_audio, post_meta = post_transform(hw_audio, sr, rng, {}, cfg.get('audio_parameters', {}))
 
-            relpath = f"1/{cat_name}_{i}.wav"
+            filename = f"uav_{cat_name}_{i}.wav"
+            writer, split = get_writer_for_sample(1, str(drone_file) if drone_file is not None else None, seed_key)
             if not dry_run:
-                write_wav(out / relpath, final_audio, sr)
+                wav_path = writer.write_wav('1', filename, final_audio, sr)
             seed = int(seed_from_key(master_seed, seed_key))
+            relpath = f"{split}/1/{filename}"
             # assemble extras from transform metas
             extras = {}
             for d in (meta_delta, mix_meta, att_meta, lpf_meta, rir_meta, hw_meta, post_meta):
@@ -213,7 +243,9 @@ def run_smoke(config_path, out_dir, dry_run=False):
                           'distance_m': distance_m, 'target_snr_db': target_snr_val}
 
             out_obj = {'train_meta': train_meta, 'debug_meta': debug_meta}
-            append_jsonl_line(stream, out_obj)
+            writer.append_jsonl(train_meta, debug_meta)
+            # also append to combined top-level jsonl for compatibility
+            append_jsonl_line(combined_stream, out_obj)
             samples_meta.append(out_obj)
             total_generated += 1
 
@@ -246,10 +278,12 @@ def run_smoke(config_path, out_dir, dry_run=False):
                 mixed, mix_meta = mix_transform(audio, sr, rng, merged_meta, category, cfg)
             hw_audio, hw_meta = hardware_transform(mixed, sr, rng, {}, cfg.get('mems_simulation', {}))
             final_audio, post_meta = post_transform(hw_audio, sr, rng, {}, cfg.get('audio_parameters', {}))
-            relpath = f"0/{cat_name}_{i}.wav"
+            filename = f"bg_{cat_name}_{i}.wav"
+            writer, split = get_writer_for_sample(0, None, seed_key)
             if not dry_run:
-                write_wav(out / relpath, final_audio, sr)
+                wav_path = writer.write_wav('0', filename, final_audio, sr)
             seed = int(seed_from_key(master_seed, seed_key))
+            relpath = f"{split}/0/{filename}"
             extras = {}
             for d in (meta_delta, mix_meta, att_meta, lpf_meta, hw_meta, post_meta):
                 for k, v in (d or {}).items():
@@ -291,7 +325,9 @@ def run_smoke(config_path, out_dir, dry_run=False):
                           'distance_m': sampled_distance if sampled_distance is not None else distance_m,
                           'target_snr_db': sampled_target_snr}
             out_obj = {'train_meta': train_meta, 'debug_meta': debug_meta}
-            append_jsonl_line(stream, out_obj)
+            writer.append_jsonl(train_meta, debug_meta)
+            # also append to combined top-level jsonl for compatibility
+            append_jsonl_line(combined_stream, out_obj)
             samples_meta.append(out_obj)
             total_generated += 1
 

@@ -5,7 +5,7 @@
   "samples": [
     {
       "train_meta": {
-        "relpath": "1/drone_1000m_0.wav",
+        "relpath": "train/1/uav_drone_1000m_0.wav",
         "seed_key": "drone_1000m|0",
         "seed": 562508219,
         "label": 1,
@@ -92,7 +92,7 @@
     },
     {
       "train_meta": {
-        "relpath": "1/drone_850m_0.wav",
+        "relpath": "train/1/uav_drone_850m_0.wav",
         "seed_key": "drone_850m|0",
         "seed": 2609602745,
         "label": 1,
@@ -179,7 +179,7 @@
     },
     {
       "train_meta": {
-        "relpath": "1/drone_700m_0.wav",
+        "relpath": "train/1/uav_drone_700m_0.wav",
         "seed_key": "drone_700m|0",
         "seed": 2721932638,
         "label": 1,
@@ -260,7 +260,7 @@
     },
     {
       "train_meta": {
-        "relpath": "1/drone_600m_0.wav",
+        "relpath": "train/1/uav_drone_600m_0.wav",
         "seed_key": "drone_600m|0",
         "seed": 1768011449,
         "label": 1,
@@ -341,7 +341,7 @@
     },
     {
       "train_meta": {
-        "relpath": "1/drone_500m_0.wav",
+        "relpath": "train/1/uav_drone_500m_0.wav",
         "seed_key": "drone_500m|0",
         "seed": 4025861219,
         "label": 1,
@@ -428,7 +428,7 @@
     },
     {
       "train_meta": {
-        "relpath": "1/drone_350m_0.wav",
+        "relpath": "train/1/uav_drone_350m_0.wav",
         "seed_key": "drone_350m|0",
         "seed": 4048334840,
         "label": 1,
@@ -515,7 +515,7 @@
     },
     {
       "train_meta": {
-        "relpath": "1/drone_300m_0.wav",
+        "relpath": "train/1/uav_drone_300m_0.wav",
         "seed_key": "drone_300m|0",
         "seed": 967583560,
         "label": 1,
@@ -590,7 +590,7 @@
     },
     {
       "train_meta": {
-        "relpath": "1/drone_200m_0.wav",
+        "relpath": "train/1/uav_drone_200m_0.wav",
         "seed_key": "drone_200m|0",
         "seed": 4075877547,
         "label": 1,
@@ -677,7 +677,7 @@
     },
     {
       "train_meta": {
-        "relpath": "1/drone_100m_0.wav",
+        "relpath": "train/1/uav_drone_100m_0.wav",
         "seed_key": "drone_100m|0",
         "seed": 1952745041,
         "label": 1,
@@ -752,7 +752,7 @@
     },
     {
       "train_meta": {
-        "relpath": "0/ambient_extreme_0.wav",
+        "relpath": "train/0/bg_ambient_extreme_0.wav",
         "seed_key": "ambient_extreme|0",
         "seed": 1435682431,
         "label": 0,
@@ -804,7 +804,7 @@
     },
     {
       "train_meta": {
-        "relpath": "0/ambient_very_complex_0.wav",
+        "relpath": "train/0/bg_ambient_very_complex_0.wav",
         "seed_key": "ambient_very_complex|0",
         "seed": 2684777198,
         "label": 0,
@@ -856,7 +856,7 @@
     },
     {
       "train_meta": {
-        "relpath": "0/ambient_complex_0.wav",
+        "relpath": "train/0/bg_ambient_complex_0.wav",
         "seed_key": "ambient_complex|0",
         "seed": 857900402,
         "label": 0,
@@ -905,7 +905,7 @@
     },
     {
       "train_meta": {
-        "relpath": "0/ambient_moderate_0.wav",
+        "relpath": "train/0/bg_ambient_moderate_0.wav",
         "seed_key": "ambient_moderate|0",
         "seed": 1934877059,
         "label": 0,
