@@ -46,7 +46,7 @@ def apply_pitch_shift(audio, sr, n_semitones):
     return librosa.effects.pitch_shift(audio, sr=sr, n_steps=n_semitones)
 
 
-def apply_spectral_filter(audio, sr, filter_type='lowpass'):
+def apply_spectral_filter(audio, sr, filter_type='lowpass', rng=None):
     """Apply spectral filtering (wind interference simulation).
     
     Args:
@@ -58,13 +58,17 @@ def apply_spectral_filter(audio, sr, filter_type='lowpass'):
         Filtered audio
     """
     nyquist = sr / 2
+
+    # Determinism smoke check: require explicit RNG (no global fallbacks)
+    if rng is None:
+        raise RuntimeError("rng is None — determinism check failed in apply_spectral_filter")
     
     if filter_type == 'lowpass':
         # Simulate low-frequency wind masking high frequencies
         # RANDOM cutoff between 3-5 kHz
-        cutoff = random.uniform(3000, 5000)  # Hz
+        cutoff = (rng.uniform(3000, 5000) if rng is not None else random.uniform(3000, 5000))  # Hz
         # RANDOM attenuation intensity (0.2-0.4)
-        attenuation = random.uniform(0.2, 0.4)
+        attenuation = (rng.uniform(0.2, 0.4) if rng is not None else random.uniform(0.2, 0.4))
         audio_fft = np.fft.rfft(audio)
         freqs = np.fft.rfftfreq(len(audio), 1/sr)
         audio_fft[freqs > cutoff] *= attenuation
@@ -73,9 +77,9 @@ def apply_spectral_filter(audio, sr, filter_type='lowpass'):
     elif filter_type == 'highpass':
         # Simulate distant sound (lose low frequencies)
         # RANDOM cutoff between 200-500 Hz
-        cutoff = random.uniform(200, 500)  # Hz
+        cutoff = (rng.uniform(200, 500) if rng is not None else random.uniform(200, 500))  # Hz
         # RANDOM attenuation intensity (0.2-0.4)
-        attenuation = random.uniform(0.2, 0.4)
+        attenuation = (rng.uniform(0.2, 0.4) if rng is not None else random.uniform(0.2, 0.4))
         audio_fft = np.fft.rfft(audio)
         freqs = np.fft.rfftfreq(len(audio), 1/sr)
         audio_fft[freqs < cutoff] *= attenuation
@@ -84,11 +88,11 @@ def apply_spectral_filter(audio, sr, filter_type='lowpass'):
     elif filter_type == 'bandstop':
         # Simulate frequency-specific interference
         # RANDOM center frequency (drone harmonics 1-3 kHz)
-        center = random.uniform(1000, 3000)  # Hz
+        center = (rng.uniform(1000, 3000) if rng is not None else random.uniform(1000, 3000))  # Hz
         # RANDOM bandwidth (300-700 Hz)
-        width = random.uniform(300, 700)
+        width = (rng.uniform(300, 700) if rng is not None else random.uniform(300, 700))
         # RANDOM attenuation depth (0.1-0.3)
-        attenuation = random.uniform(0.1, 0.3)
+        attenuation = (rng.uniform(0.1, 0.3) if rng is not None else random.uniform(0.1, 0.3))
         audio_fft = np.fft.rfft(audio)
         freqs = np.fft.rfftfreq(len(audio), 1/sr)
         mask = np.abs(freqs - center) < width
@@ -98,7 +102,7 @@ def apply_spectral_filter(audio, sr, filter_type='lowpass'):
     return audio
 
 
-def inject_background_noise(audio, sr, intensity=0.05):
+def inject_background_noise(audio, sr, intensity=0.05, rng=None):
     """Inject subtle background noise (real-world interference).
     
     Args:
@@ -109,18 +113,22 @@ def inject_background_noise(audio, sr, intensity=0.05):
     Returns:
         Audio with noise
     """
+    # Determinism smoke check: require explicit RNG (no global fallbacks)
+    if rng is None:
+        raise RuntimeError("rng is None — determinism check failed in inject_background_noise")
+
     # RANDOM intensity variation ±20%
-    actual_intensity = intensity * random.uniform(0.8, 1.2)
+    actual_intensity = intensity * rng.uniform(0.8, 1.2)
     
     # Mix of white noise and pink noise (more realistic)
     # RANDOM mix ratio
-    white_ratio = random.uniform(0.4, 0.6)
+    white_ratio = (rng.uniform(0.4, 0.6) if rng is not None else random.uniform(0.4, 0.6))
     
     # White noise (equal energy at all frequencies)
-    white_noise = np.random.normal(0, actual_intensity, len(audio))
+    white_noise = (rng.normal(0, actual_intensity, len(audio)) if rng is not None else np.random.normal(0, actual_intensity, len(audio)))
     
     # Pink noise (1/f spectrum, more natural)
-    pink_noise = np.random.normal(0, actual_intensity, len(audio))
+    pink_noise = (rng.normal(0, actual_intensity, len(audio)) if rng is not None else np.random.normal(0, actual_intensity, len(audio)))
     pink_fft = np.fft.rfft(pink_noise)
     freqs = np.fft.rfftfreq(len(audio), 1/sr)
     # Apply 1/f filter
@@ -134,7 +142,7 @@ def inject_background_noise(audio, sr, intensity=0.05):
     return audio + noise
 
 
-def apply_distortion_chain(audio, sr, config):
+def apply_distortion_chain(audio, sr, config, rng=None):
     """Apply chain of distortions based on config.
     
     Args:
@@ -145,6 +153,10 @@ def apply_distortion_chain(audio, sr, config):
     Returns:
         Distorted audio (same length as input after resampling)
     """
+    # Determinism smoke check: require explicit RNG (no global fallbacks)
+    if rng is None:
+        raise RuntimeError("rng is None — determinism check failed in apply_distortion_chain")
+
     original_length = len(audio)
     distorted = audio.copy()
     
@@ -152,21 +164,30 @@ def apply_distortion_chain(audio, sr, config):
     if 'time_stretch_factor' in config:
         factors = config['time_stretch_factor']
         if isinstance(factors, list):
-            factor = random.choice(factors)
+            if rng is not None:
+                factor = rng.choice(factors)
+            else:
+                factor = random.choice(factors)
         else:
             factor = factors
         
         if factor != 1.0:
             distorted = apply_time_stretch(distorted, sr, factor)
-            # Resample to original length to maintain consistency
+            # Keep length consistent by padding/cropping (do NOT misuse resample)
             if len(distorted) != original_length:
-                distorted = librosa.resample(distorted, orig_sr=len(distorted), target_sr=original_length)
+                if len(distorted) > original_length:
+                    distorted = distorted[:original_length]
+                else:
+                    distorted = np.pad(distorted, (0, original_length - len(distorted)), mode='constant')
     
     # Pitch shift (if specified) - doesn't change length
     if 'pitch_shift_semitones' in config:
         semitones = config['pitch_shift_semitones']
         if isinstance(semitones, list):
-            n_steps = random.choice(semitones)
+            if rng is not None:
+                n_steps = rng.choice(semitones)
+            else:
+                n_steps = random.choice(semitones)
         else:
             n_steps = semitones
         
@@ -183,12 +204,15 @@ def apply_distortion_chain(audio, sr, config):
     # Spectral filter (if enabled)
     if config.get('apply_spectral_filter', False):
         filter_types = ['lowpass', 'highpass', 'bandstop']
-        filter_type = random.choice(filter_types)
-        distorted = apply_spectral_filter(distorted, sr, filter_type)
+        if rng is not None:
+            filter_type = rng.choice(filter_types)
+        else:
+            filter_type = random.choice(filter_types)
+        distorted = apply_spectral_filter(distorted, sr, filter_type, rng=rng)
     
     # Background noise injection
     if 'noise_injection' in config and config['noise_injection'] > 0:
-        distorted = inject_background_noise(distorted, sr, config['noise_injection'])
+        distorted = inject_background_noise(distorted, sr, config['noise_injection'], rng=rng)
     
     # Final length check and normalization
     if len(distorted) != original_length:

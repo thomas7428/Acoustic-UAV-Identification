@@ -49,8 +49,26 @@ def ensure_duration(signal, sr, target_duration, crossfade_duration=0.1):
 
 
 def load_audio_file(file_path, sr, duration=None):
+    """Load WAV file using soundfile when possible for speed and robustness.
+    Falls back to librosa.load on failure.
+    """
+    import soundfile as sf
     try:
-        signal, _ = librosa.load(file_path, sr=sr, duration=duration, mono=True)
-        return signal
+        # soundfile can read WAVs quickly; if file is longer than duration, read full and slice
+        data, fs = sf.read(str(file_path), dtype='float32')
+        if data.ndim > 1:
+            data = np.mean(data, axis=1)
+        if fs != sr:
+            # resample if necessary using librosa (small cost)
+            data = librosa.resample(data.astype('float32'), orig_sr=fs, target_sr=sr)
+        if duration is not None:
+            max_samples = int(duration * sr)
+            if len(data) > max_samples:
+                data = data[:max_samples]
+        return data
     except Exception:
-        return None
+        try:
+            signal, _ = librosa.load(file_path, sr=sr, duration=duration, mono=True)
+            return signal
+        except Exception:
+            return None
