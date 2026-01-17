@@ -32,9 +32,9 @@
     "samples_per_category_no_drone": 10,
     "save_mixing_info": true,
     "info_filename": "augmentation_metadata.json",
-    "total_per_class": {"drone": 500, "no_drone": 500},
-    "split_ratio": [0.7, 0.15, 0.15]
-  },
+      "total_per_class": {"drone": 20, "no_drone": 20},
+      "split_ratio": [0.7, 0.15, 0.15]
+    },
   "advanced": {"random_seed": 42, "enable_random_offset": true, "enable_amplitude_variation": true, "amplitude_variation_db": 2},
   "advanced_augmentations": {
     "enabled": true,

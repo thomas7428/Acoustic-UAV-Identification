@@ -19,6 +19,8 @@ DATASET_ROOT = PROJECT_ROOT / "0 - DADS dataset extraction" / DATASET_NAME
 
 # Canonical dataset folders (centralized names used across scripts)
 EXTRACTION_DIR = PROJECT_ROOT / "0 - DADS dataset extraction"
+# Alias expected by some documentation: data extraction root
+DATA_EXTRACTION_ROOT = EXTRACTION_DIR
 DATASET_DADS_DIR = EXTRACTION_DIR / "dataset_dads"
 DATASET_DADS_OFFLINE_DIR = EXTRACTION_DIR / "dataset_DADS_offline"  # Full DADS dataset for offline use
 DATASET_AUGMENTED_DIR = EXTRACTION_DIR / "dataset_augmented"
@@ -47,7 +49,10 @@ if V4_ACTIVE_DATASET_ID:
     DATASET_ROOT = _v4_root
 
 # Config of datasets used for training and validation
-CONFIG_DATASET_PATH = PROJECT_ROOT / "0 - DADS dataset extraction" / "augment_config_v4.json"
+AUGMENTATION_CONFIG = EXTRACTION_DIR / 'build_config.json'
+# Convenience config entries for augmentation entrypoint and config
+# AUGMENTATION_CONFIG points to the single source-of-truth build_config.json
+AUGMENTATION_WRAPPER = EXTRACTION_DIR / 'build_dataset_v4.py'
 
 # Canonical pools used by augmentation (can be overridden via env vars)
 # Example: export NOISE_POOL_DIR=/mnt/pools/noise
