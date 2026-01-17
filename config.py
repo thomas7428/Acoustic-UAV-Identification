@@ -27,9 +27,34 @@ DATASET_TRAIN_DIR = EXTRACTION_DIR / "dataset_train"
 DATASET_VAL_DIR = EXTRACTION_DIR / "dataset_val"
 DATASET_TEST_DIR = EXTRACTION_DIR / "dataset_test"
 
+# v4 dataset canonical location (versioned and stored inside extraction dir)
+# Use V4_ACTIVE_DATASET_ID env var to redirect pipeline consumers to a v4 dataset
+V4_DATASETS_DIR = EXTRACTION_DIR / "datasets_v4"
+try:
+    V4_DATASETS_DIR.mkdir(exist_ok=True)
+except Exception:
+    # best-effort; some environments may not allow mkdir here at import time
+    pass
+
+# Optional: allow choosing an active v4 dataset via env var. When set,
+# DATASET_TRAIN_DIR/VAL/TEST and DATASET_ROOT will point into that v4 dataset
+V4_ACTIVE_DATASET_ID = os.environ.get('V4_ACTIVE_DATASET_ID', '').strip()
+if V4_ACTIVE_DATASET_ID:
+    _v4_root = V4_DATASETS_DIR / V4_ACTIVE_DATASET_ID
+    DATASET_TRAIN_DIR = _v4_root / 'train'
+    DATASET_VAL_DIR = _v4_root / 'val'
+    DATASET_TEST_DIR = _v4_root / 'test'
+    DATASET_ROOT = _v4_root
+
 # Config of datasets used for training and validation
 CONFIG_DATASET_PATH = PROJECT_ROOT / "0 - DADS dataset extraction" / "augment_config_v4.json"
 
+# Canonical pools used by augmentation (can be overridden via env vars)
+# Example: export NOISE_POOL_DIR=/mnt/pools/noise
+# If the env var is not set, defaults to EXTRACTION_DIR/pools/<name>
+NOISE_POOL_DIR = Path(os.environ.get('NOISE_POOL_DIR')) if os.environ.get('NOISE_POOL_DIR') else (EXTRACTION_DIR / 'pools' / 'noise')
+RIR_POOL_DIR = Path(os.environ.get('RIR_POOL_DIR')) if os.environ.get('RIR_POOL_DIR') else (EXTRACTION_DIR / 'pools' / 'rirs')
+HARDNEG_POOL_DIR = Path(os.environ.get('HARDNEG_POOL_DIR')) if os.environ.get('HARDNEG_POOL_DIR') else (EXTRACTION_DIR / 'pools' / 'hardneg')
 # Feature extraction paths
 EXTRACTED_FEATURES_DIR = PROJECT_ROOT / "0 - DADS dataset extraction" / "extracted_features"
 
@@ -160,6 +185,7 @@ SCORES_PATHS = {
 
 # Audio parameters
 SAMPLE_RATE = 22050
+SAMPLE_RATE_HZ = SAMPLE_RATE
 """
 Desired audio duration (seconds) used across the pipeline. Set this to
 the target temporal length for all generated/processed WAV files.
@@ -187,6 +213,37 @@ LEARNING_RATE = 0.0001  # Default learning rate
 # WAV write subtype used by augmentation/save routines (must be a valid subtype for soundfile)
 # Examples: 'PCM_16', 'FLOAT'
 AUDIO_WAV_SUBTYPE = 'FLOAT'
+
+# Dataset generation defaults for v4
+DATASET_TARGET_SIZE = int(os.environ.get('DATASET_TARGET_SIZE', '30000'))
+DEFAULT_SPLIT_RATIOS = {
+    'train': float(os.environ.get('SPLIT_TRAIN_FRAC', 0.8)),
+    'val': float(os.environ.get('SPLIT_VAL_FRAC', 0.1)),
+    'test': float(os.environ.get('SPLIT_TEST_FRAC', 0.1)),
+}
+# Default OOD fractions
+DEFAULT_OOD_FRACTIONS = {
+    'ood_noise_frac': float(os.environ.get('OOD_NOISE_FRAC', 0.15)),
+    'ood_rir_frac': float(os.environ.get('OOD_RIR_FRAC', 0.15)),
+    'hardneg_frac': float(os.environ.get('HARDNEG_FRAC', 0.10)),
+}
+
+# R2 domain randomization defaults (hardware + propagation)
+HW_DOMAIN_DEFAULTS = {
+    'hpf_hz_range': [50.0, 200.0],
+    'noise_floor_db_range': [-75.0, -50.0],
+    'fr_tilt_db_per_oct_range': [-3.0, 3.0],
+    'notch_count_range': [0, 2],
+    'notch_depth_db_range': [1.0, 3.0],
+    'adc_bits_choices': [16, 24]
+}
+
+PROP_DOMAIN_DEFAULTS = {
+    # global fallback distance bounds (meters) used when category bounds absent
+    'distance_bounds': [50.0, 1000.0],
+    'beta_jitter_range': [0.4, 0.8],
+    'dry_wet_range': [0.2, 0.6]
+}
 
 # Mel extraction parameters (central source of truth)
 # Use these values everywhere to ensure consistent features between

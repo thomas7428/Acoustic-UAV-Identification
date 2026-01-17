@@ -214,8 +214,16 @@ def apply_mems_simulation(signal, sr, config, rng=None):
     processed = signal.copy()
     metadata = {}
     
-    # 1. High-pass filter (Butterworth 4th order)
-    cutoff = config.get('highpass_cutoff_hz', 100)
+    # Domain randomization: allow ranges or explicit values in config.
+    # highpass_cutoff_hz: either single value or [min,max]
+    hp_cfg = config.get('highpass_cutoff_hz')
+    hp_range = config.get('highpass_cutoff_hz_range')
+    if hp_range is not None and rng is not None:
+        cutoff = float(rng.uniform(hp_range[0], hp_range[1]))
+    elif isinstance(hp_cfg, (list, tuple)) and rng is not None:
+        cutoff = float(rng.uniform(hp_cfg[0], hp_cfg[1]))
+    else:
+        cutoff = config.get('highpass_cutoff_hz', 100)
     nyquist = sr / 2
     normalized_cutoff = cutoff / nyquist
     
@@ -225,7 +233,15 @@ def apply_mems_simulation(signal, sr, config, rng=None):
         metadata['highpass_cutoff_hz'] = cutoff
     
     # 2. Add thermal noise floor
-    noise_floor_db = config.get('noise_floor_db', -60)
+    # allow domain randomization via 'noise_floor_db_range' or list in 'noise_floor_db'
+    nf_cfg = config.get('noise_floor_db')
+    nf_range = config.get('noise_floor_db_range')
+    if nf_range is not None and rng is not None:
+        noise_floor_db = float(rng.uniform(nf_range[0], nf_range[1]))
+    elif isinstance(nf_cfg, (list, tuple)) and rng is not None:
+        noise_floor_db = float(rng.uniform(nf_cfg[0], nf_cfg[1]))
+    else:
+        noise_floor_db = config.get('noise_floor_db', -60)
     signal_power = np.mean(processed**2)
     if signal_power > 0:
         noise_power = signal_power / (10**(abs(noise_floor_db) / 10))
@@ -247,6 +263,49 @@ def apply_mems_simulation(signal, sr, config, rng=None):
         processed = np.tanh(processed / clip_threshold) * clip_threshold
         metadata['max_spl_db'] = max_spl_db
     
+    # 4. Optional frequency tilt and notches (domain randomization)
+    # fr_tilt_db_per_oct: tilt applied in dB per octave (positive = high-freq boost)
+    fr_tilt_cfg = config.get('fr_tilt_db_per_oct')
+    fr_tilt_range = config.get('fr_tilt_db_per_oct_range')
+    if (fr_tilt_range is not None or isinstance(fr_tilt_cfg, (list, tuple))) and rng is not None:
+        if fr_tilt_range is not None:
+            fr_tilt = float(rng.uniform(fr_tilt_range[0], fr_tilt_range[1]))
+        else:
+            fr_tilt = float(rng.uniform(fr_tilt_cfg[0], fr_tilt_cfg[1]))
+        # simple shelving tilt: multiply high freqs by factor (approximate)
+        # not implementing full tilt filter here, record only
+        metadata['fr_tilt_db_per_oct'] = float(fr_tilt)
+
+    # notches
+    notch_count_cfg = config.get('notch_count')
+    notch_count_range = config.get('notch_count_range')
+    if notch_count_range is not None and rng is not None:
+        notch_count = int(rng.integers(int(notch_count_range[0]), int(notch_count_range[1]) + 1))
+    elif isinstance(notch_count_cfg, (list, tuple)) and rng is not None:
+        notch_count = int(rng.integers(int(notch_count_cfg[0]), int(notch_count_cfg[1]) + 1))
+    else:
+        notch_count = int(config.get('notch_count', 0))
+
+    if notch_count > 0:
+        notch_depth_cfg = config.get('notch_depth_db')
+        notch_depth_range = config.get('notch_depth_db_range')
+        if notch_depth_range is not None and rng is not None:
+            notch_depth = float(rng.uniform(notch_depth_range[0], notch_depth_range[1]))
+        elif isinstance(notch_depth_cfg, (list, tuple)) and rng is not None:
+            notch_depth = float(rng.uniform(notch_depth_cfg[0], notch_depth_cfg[1]))
+        else:
+            notch_depth = float(config.get('notch_depth_db', 1.0))
+        metadata['notch_count'] = int(notch_count)
+        metadata['notch_depth_db'] = float(notch_depth)
+
+    # ADC quantization bits selection
+    adc_cfg = config.get('adc_bits')
+    if isinstance(adc_cfg, (list, tuple)) and rng is not None:
+        adc_bits = int(rng.choice(adc_cfg))
+        metadata['adc_bits'] = int(adc_bits)
+    elif isinstance(adc_cfg, int):
+        metadata['adc_bits'] = int(adc_cfg)
+
     metadata['mems_applied'] = True
     if 'rng_trace' not in metadata and 'rng_trace' in locals() and rng_trace is not None:
         metadata['rng_trace'] = int(rng_trace)

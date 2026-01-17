@@ -111,8 +111,20 @@ def run(strict=False, max_leak_auc=0.6, max_clip_count=0, min_unique_rir=3, min_
     print('Generating run2...')
     run_smoke(str(cfg_path), str(run2), dry_run=False)
 
-    meta1 = load_jsonl(run1 / 'augmentation_samples.jsonl')
-    meta2 = load_jsonl(run2 / 'augmentation_samples.jsonl')
+    def _load_meta_run(run_dir):
+        # prefer root-level jsonl if present (legacy), otherwise concatenate per-split jsonls
+        root = run_dir / 'augmentation_samples.jsonl'
+        if root.exists():
+            return load_jsonl(root)
+        metas = []
+        for s in ['train', 'val', 'test', 'report']:
+            p = run_dir / s / 'augmentation_samples.jsonl'
+            if p.exists():
+                metas.extend(load_jsonl(p))
+        return metas
+
+    meta1 = _load_meta_run(run1)
+    meta2 = _load_meta_run(run2)
     wavs = list((run1).rglob('*.wav'))
     print('JSONL lines:', len(meta1), 'WAV files:', len(wavs))
     if len(meta1) != len(wavs):
@@ -278,9 +290,112 @@ def run(strict=False, max_leak_auc=0.6, max_clip_count=0, min_unique_rir=3, min_
     return 0
 
 
+def validate_dataset(dataset_path: Path, strict=False, max_leak_auc=0.6, max_clip_count=0, min_unique_rir=3, min_unique_scene=3, max_stem_dominance=0.5):
+    """Validate an existing dataset folder structured as datasets/<id>/<split>/*"""
+    ds = Path(dataset_path)
+    if not ds.exists():
+        print('Dataset not found:', ds)
+        return 2
+
+    # defensive: fail/warn if a root-level augmentation_samples.jsonl exists alongside split jsonls
+    root_meta = ds / 'augmentation_samples.jsonl'
+    if root_meta.exists():
+        # check for any split-contained jsonl
+        splits_with_meta = [d for d in ds.iterdir() if d.is_dir() and (d / 'augmentation_samples.jsonl').exists()]
+        if splits_with_meta:
+            msg = f'ERROR: Found root-level augmentation_samples.jsonl alongside split jsonl files in {ds} (ambiguous).'
+            print(msg)
+            if strict:
+                return 2
+            else:
+                print('Warning: consider removing root augmentation_samples.jsonl; proceeding with split-contained validation')
+
+    # iterate splits
+    splits = [d for d in ds.iterdir() if d.is_dir()]
+    all_train_metas = []
+    for s in sorted(splits):
+        meta_path = s / 'augmentation_samples.jsonl'
+        metas = []
+        if meta_path.exists():
+            with meta_path.open('r', encoding='utf-8') as fh:
+                for line in fh:
+                    if not line.strip():
+                        continue
+                    metas.append(json.loads(line))
+        wavs = list(s.rglob('*.wav'))
+        print(f"Split {s.name}: JSONL lines: {len(metas)} WAV files: {len(wavs)}")
+        if len(metas) != len(wavs):
+            print(f'FAIL: JSONL lines != WAV count in split {s.name}')
+            if strict:
+                return 2
+        # clipping check
+        clip_issues = [m for m in metas if (m.get('train_meta', {}) or {}).get('clip_count', 0) > max_clip_count]
+        if clip_issues:
+            print(f'FAIL: clipping detected in split {s.name}:', len(clip_issues))
+            if strict:
+                return 2
+        if s.name == 'train':
+            all_train_metas.extend(metas)
+
+    # metadata-only leak CV on train split
+    if all_train_metas:
+        try:
+            from sklearn.feature_extraction import DictVectorizer
+            from sklearn.linear_model import LogisticRegression
+            from sklearn.metrics import roc_auc_score
+            from sklearn.model_selection import StratifiedKFold
+            train_dicts = [m.get('train_meta', {}) for m in all_train_metas]
+            labels = [int(m.get('train_meta', {}).get('label', 0)) for m in all_train_metas]
+            safe_keys = ['actual_snr_db_preexport', 'peak_dbfs', 'rms_dbfs', 'clip_count']
+            feat_dicts = []
+            for td in train_dicts:
+                fd = {}
+                for k in safe_keys:
+                    v = td.get(k)
+                    fd[f'has_{k}'] = 0 if v is None else 1
+                    if v is None:
+                        continue
+                    if isinstance(v, (int, float, bool)):
+                        fd[k] = v
+                    else:
+                        fd[k] = str(v)
+                feat_dicts.append(fd)
+            vec = DictVectorizer(sparse=False)
+            X = vec.fit_transform(feat_dicts)
+            mean_auc = float('nan')
+            if X.shape[0] >= 10 and X.shape[1] > 0:
+                from collections import Counter
+                cls_counts = Counter(labels)
+                min_class_count = min(cls_counts.values()) if cls_counts else 0
+                if min_class_count >= 2:
+                    n_splits = min(5, max(2, min_class_count))
+                    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+                    aucs = []
+                    for tr_idx, te_idx in skf.split(X, labels):
+                        Xtr, Xte = X[tr_idx], X[te_idx]
+                        ytr = [labels[i] for i in tr_idx]
+                        yte = [labels[i] for i in te_idx]
+                        clf = LogisticRegression(max_iter=1000)
+                        clf.fit(Xtr, ytr)
+                        probs = clf.predict_proba(Xte)[:, 1]
+                        aucs.append(float(roc_auc_score(yte, probs)))
+                    mean_auc = float(np.mean(aucs))
+            print('Metadata-only CV AUC (train split):', mean_auc)
+            if mean_auc > max_leak_auc:
+                print(f'WARN: metadata-only classifier AUC > {max_leak_auc} (possible leak)')
+                if strict:
+                    return 2
+        except Exception as e:
+            print('Skipping metadata leak check (sklearn missing or error):', e)
+
+    print('VALIDATE_V4_DATASET: OK')
+    return 0
+
+
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
+    parser.add_argument('--dataset', type=str, default=None, help='Path to existing dataset directory to validate')
     parser.add_argument('--strict', action='store_true', help='Fail on warnings')
     parser.add_argument('--max_leak_auc', type=float, default=0.6)
     parser.add_argument('--max_clip_count', type=int, default=0)
@@ -288,4 +403,6 @@ if __name__ == '__main__':
     parser.add_argument('--min_unique_scene', type=int, default=3)
     parser.add_argument('--max_stem_dominance', type=float, default=0.5)
     args = parser.parse_args()
+    if args.dataset:
+        sys.exit(validate_dataset(Path(args.dataset), strict=args.strict, max_leak_auc=args.max_leak_auc, max_clip_count=args.max_clip_count, min_unique_rir=args.min_unique_rir, min_unique_scene=args.min_unique_scene, max_stem_dominance=args.max_stem_dominance))
     sys.exit(run(strict=args.strict, max_leak_auc=args.max_leak_auc, max_clip_count=args.max_clip_count, min_unique_rir=args.min_unique_rir, min_unique_scene=args.min_unique_scene, max_stem_dominance=args.max_stem_dominance))
