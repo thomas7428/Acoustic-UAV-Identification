@@ -22,7 +22,7 @@ SAMPLES_PER_TRACK = SAMPLE_RATE * DURATION
 # Default dataset root
 DEFAULT_DATASET_PATH = Path(getattr(config, 'DATASET_ROOT', '.'))
 
-def save_mfcc(dataset_path, out_path, n_mfcc=config.MFCC_N_MFCC, n_fft=config.MEL_N_FFT, hop_length=config.MEL_HOP_LENGTH, num_segments=config.NUM_SEGMENTS, output_format='npz'):
+def save_mfcc(dataset_path, out_path, n_mfcc=config.MFCC_N_MFCC, n_fft=config.MEL_N_FFT, hop_length=config.MEL_HOP_LENGTH, num_segments=config.NUM_SEGMENTS, output_format='npz', max_files=None):
     # num_segments let's you chop up track into different segments to create a bigger dataset.
     # Value is changed at the bottom of the script.
 
@@ -36,11 +36,14 @@ def save_mfcc(dataset_path, out_path, n_mfcc=config.MFCC_N_MFCC, n_fft=config.ME
     num_samples_per_segment = int(SAMPLES_PER_TRACK / num_segments)
     expected_num_mfcc_vectors_per_segment = math.ceil(num_samples_per_segment / hop_length) # 1.2 -> 2
 
-    # Count total files for progress tracking
+    # Count total audio files for progress tracking (ignore non-audio files like .jsonl)
+    audio_exts = ('.wav', '.flac', '.mp3', '.ogg', '.m4a')
     total_files = 0
     for dirpath, dirnames, filenames in os.walk(dataset_path):
         if dirpath != str(dataset_path):
-            total_files += len(filenames)
+            for fn in filenames:
+                if fn.lower().endswith(audio_exts):
+                    total_files += 1
     
     processed_files = 0
     progress_interval = max(1, total_files // 5)  # 20% intervals
@@ -63,8 +66,13 @@ def save_mfcc(dataset_path, out_path, n_mfcc=config.MFCC_N_MFCC, n_fft=config.ME
 
             # Processes all the audio files for a specific class.
             for f in filenames:
+                # skip non-audio files (metadata, jsonl, etc.)
+                if not f.lower().endswith(audio_exts):
+                    continue
                 # Progress tracking (20% intervals)
                 processed_files += 1
+                if max_files is not None and processed_files > max_files:
+                    break
                 if processed_files % progress_interval == 0 or processed_files == total_files:
                     pct = (processed_files / total_files * 100) if total_files > 0 else 0
                     print(f"Progress: {processed_files}/{total_files} ({pct:.0f}%)", flush=True)
@@ -143,6 +151,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Extract MFCCs per split')
     parser.add_argument('--split', choices=['train','val','test'], default='train')
     parser.add_argument('--num_segments', type=int, default=None)
+    parser.add_argument('--dataset-root', type=str, default=None, help='Optional override for dataset root directory')
+    parser.add_argument('--max-files', type=int, default=None, help='Maximum number of files to process (smoke test)')
     parser.add_argument('--output-format', choices=['npz', 'json', 'both'], default='npz',
                        help='Output format: npz (default, fast), json (legacy), both (compatibility)')
     args = parser.parse_args()
@@ -176,7 +186,7 @@ if __name__ == "__main__":
     print(f"Segments: {args.num_segments}")
     print("="*60 + "\n")
 
-    save_mfcc(dataset_path, out_path, num_segments=segments, output_format=args.output_format)
+    save_mfcc(dataset_path, out_path, num_segments=segments, output_format=args.output_format, max_files=args.max_files)
     
     print("\n" + "="*60)
     print("Feature extraction complete!")

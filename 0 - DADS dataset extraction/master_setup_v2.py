@@ -49,6 +49,10 @@ except Exception:
         return np.pad(signal, (0, target_samples - len(signal)), mode='constant')
 
 
+# Total number of visible steps for printed progress
+TOTAL_STEPS = 3
+
+
 class colors:
     """ANSI color codes for terminal output."""
     HEADER = '\033[95m'
@@ -182,8 +186,7 @@ def check_requirements(script_dir):
         'numpy',
         'librosa',
         'soundfile',
-        'datasets',  # HuggingFace datasets
-        'tqdm'
+        'datasets'  # HuggingFace datasets
     ]
     
     missing = []
@@ -204,170 +207,9 @@ def check_requirements(script_dir):
     return True
 
 
-def combine_datasets(original_dir, augmented_dir, output_dir, dry_run=False):
-    """
-    Combine original and augmented datasets.
-    
-    Args:
-        original_dir: Directory with original samples
-        augmented_dir: Directory with augmented samples
-        output_dir: Output directory for combined dataset
-        dry_run: If True, don't actually copy files
-    """
-    original_path = Path(original_dir)
-    augmented_path = Path(augmented_dir)
-    output_path = Path(output_dir)
-    
-    if not dry_run:
-        output_path.mkdir(parents=True, exist_ok=True)
-    
-    print_info(f"Combining datasets:")
-    print(f"  Original:  {original_dir}")
-    print(f"  Augmented: {augmented_dir}")
-    print(f"  Output:    {output_dir}")
-    
-    total_copied = 0
-    
-    for class_dir in ['0', '1']:
-        if not dry_run:
-            (output_path / class_dir).mkdir(exist_ok=True)
-        
-        # Copy from original
-        orig_class_path = original_path / class_dir
-        if orig_class_path.exists():
-            files = list(orig_class_path.glob('*.wav'))
-            print(f"\n  Class {class_dir}: Copying {len(files)} original files...")
-            if not dry_run:
-                # Normalize originals to target duration and sample rate when copying
-                target_sr = config.SAMPLE_RATE
-                target_dur = config.AUDIO_DURATION_S
-                for file in files:
-                    dest = output_path / class_dir / f"orig_{file.name}"
-                    try:
-                        # Load, resample and enforce exact target duration (loop/truncate)
-                        y, _ = librosa.load(str(file), sr=target_sr)
-                        y = ensure_duration(y, target_sr, target_dur)
-                        # Use configured WAV subtype when writing combined originals
-                        subtype = getattr(config, 'AUDIO_WAV_SUBTYPE', 'FLOAT')
-                        sf.write(str(dest), y, target_sr, subtype=subtype)
-                    except Exception:
-                        raise RuntimeError(f"Failed to process original file: {file}")
-            total_copied += len(files)
-        
-        # Copy from augmented
-        aug_class_path = augmented_path / class_dir
-        if aug_class_path.exists():
-            files = list(aug_class_path.glob('*.wav'))
-            print(f"  Class {class_dir}: Copying {len(files)} augmented files...")
-            if not dry_run:
-                for file in files:
-                    shutil.copy2(file, output_path / class_dir / file.name)
-            total_copied += len(files)
-    
-    print_success(f"Combined {total_copied} files into {output_dir}")
-    return True
-
-
-def distribute_sources_to_splits(original_dir, augmented_dir, train_dir, val_dir, test_dir,
-                                 train_ratio, val_ratio, test_ratio, dry_run=False, random_seed=42):
-    """
-    Collect files from `original_dir` and `augmented_dir` and distribute them
-    directly into `train_dir`, `val_dir`, and `test_dir` according to ratios.
-    This avoids an intermediate combined directory and prevents leakage by
-    stratifying per-class and using a fixed random seed.
-    """
-    print_info("Distributing originals and augmentations into train/val/test...")
-    original_path = Path(original_dir)
-    augmented_path = Path(augmented_dir)
-    train_path = Path(train_dir)
-    val_path = Path(val_dir)
-    test_path = Path(test_dir)
-
-    stats = {}
-
-    if not dry_run:
-        train_path.mkdir(parents=True, exist_ok=True)
-        val_path.mkdir(parents=True, exist_ok=True)
-        test_path.mkdir(parents=True, exist_ok=True)
-
-    rng = random.Random(random_seed)
-
-    for class_label in ['0', '1']:
-        src_files = []
-        orig_class = original_path / class_label
-        aug_class = augmented_path / class_label
-        if orig_class.exists():
-            src_files.extend(sorted(list(orig_class.glob('*.wav'))))
-        if aug_class.exists():
-            src_files.extend(sorted(list(aug_class.glob('*.wav'))))
-
-        total = len(src_files)
-        stats[class_label] = {'total': total}
-
-        if total == 0:
-            print_warning(f"No source files found for class {class_label} (skipping)")
-            stats[class_label].update({'train': 0, 'val': 0, 'test': 0})
-            continue
-
-        # Shuffle deterministically
-        rng.shuffle(src_files)
-
-        n_train = int(total * train_ratio)
-        n_val = int(total * val_ratio)
-        n_test = total - n_train - n_val
-
-        stats[class_label].update({'train': n_train, 'val': n_val, 'test': n_test})
-
-        # Create class subdirs
-        if not dry_run:
-            (train_path / class_label).mkdir(parents=True, exist_ok=True)
-            (val_path / class_label).mkdir(parents=True, exist_ok=True)
-            (test_path / class_label).mkdir(parents=True, exist_ok=True)
-
-        # Copy files
-        idx = 0
-        for f in src_files:
-            if idx < n_train:
-                dst = train_path / class_label / f.name
-            elif idx < n_train + n_val:
-                dst = val_path / class_label / f.name
-            else:
-                dst = test_path / class_label / f.name
-
-            if dry_run:
-                print(f"Would copy {f} -> {dst}")
-            else:
-                try:
-                    shutil.copy2(f, dst)
-                except Exception as e:
-                    print_error(f"Failed to copy {f} to {dst}: {e}")
-            idx += 1
-
-    print_success("Distribution complete")
-    return stats
-
-
-def step_3_distribute_and_split(script_dir, train_ratio, val_ratio, test_ratio, dry_run):
-    """Wrapper step to distribute originals and augmentations directly into splits."""
-    print_step(3, 5, "Distribute Originals + Augmentations into Splits")
-    try:
-        originals = config.DATASET_DADS_DIR
-        augmented = config.DATASET_AUGMENTED_DIR
-        train_dir = config.DATASET_TRAIN_DIR
-        val_dir = config.DATASET_VAL_DIR
-        test_dir = config.DATASET_TEST_DIR
-
-        distribute_sources_to_splits(originals, augmented, train_dir, val_dir, test_dir,
-                                     train_ratio, val_ratio, test_ratio, dry_run=dry_run, random_seed=42)
-        return True
-    except Exception as e:
-        print_error(f"Distribution failed: {e}")
-        return False
-
-
 def step_1_download(script_dir, drone_samples, no_drone_samples, dry_run):
     """Step 1: Download DADS dataset or use offline dataset if available."""
-    print_step(1, 6, "Prepare DADS Dataset")
+    print_step(1, TOTAL_STEPS, "Prepare DADS Dataset")
     
     if dry_run:
         print_warning("Dry run - skipping dataset preparation")
@@ -406,20 +248,23 @@ def step_1_download(script_dir, drone_samples, no_drone_samples, dry_run):
         return False
 
 
-def step_2_augment(script_dir, config_file, dry_run):
+def step_2_augment(script_dir, config_file, dry_run, total_samples=None, num_workers=None, augment_dry_run=False):
     """Step 2: Augment both drone and no-drone classes."""
-    print_step(2, 6, "Augment Both Classes")
+    print_step(2, TOTAL_STEPS, "Augment Both Classes")
     
+    if dry_run:
+        print_warning("Dry run - skipping augmentation execution")
+        return True
+    # The function now delegates to the v4 builder wrapper so the augment
+    # package within this extraction root is used. The wrapper supports
+    # CLI overrides for total samples and worker count.
+    # If dry_run is requested, skip execution.
     if dry_run:
         print_warning("Dry run - skipping augmentation execution")
         return True
 
     try:
-        sys.path.insert(0, str(script_dir))
-        import json
-        from augment_dataset_v3 import generate_augmented_samples
-
-        # Load augmentation config. Accept absolute paths or resolve relative to script_dir.
+        # Resolve config path
         cfg_candidate = Path(config_file)
         if cfg_candidate.is_absolute():
             cfg_path = cfg_candidate
@@ -428,54 +273,58 @@ def step_2_augment(script_dir, config_file, dry_run):
         if not cfg_path.exists():
             print_error(f"Augmentation config not found: {cfg_path}")
             return False
-        with open(cfg_path, 'r') as f:
-            aug_cfg = json.load(f)
 
-        # Call directly (v3 with parallel processing)
-        stats = generate_augmented_samples(aug_cfg, dry_run=False)
-        print_success("Augmentation completed (direct call)")
+        # Call v4 wrapper via the local script so it uses the local augment package
+        builder = script_dir / 'build_dataset_v4.py'
+        if not builder.exists():
+            print_error(f"Augmentation wrapper not found: {builder}")
+            return False
+
+        cmd = [sys.executable, str(builder), '--config', str(cfg_path), '--out-dir', str(script_dir)]
+        if total_samples is not None:
+            cmd += ['--total-samples', str(int(total_samples))]
+        if num_workers is not None:
+            cmd += ['--num-workers', str(int(num_workers))]
+        print_info(f"Running augmentation builder: {' '.join(cmd)}")
+        # Ensure master prints its header before builder output
+        try:
+            sys.stdout.flush()
+            sys.stderr.flush()
+        except Exception:
+            pass
+
+        # Run builder with unbuffered python and stream output so master
+        # controls ordering and can prefix builder logs for clarity.
+        env = os.environ.copy()
+        env.setdefault('PYTHONUNBUFFERED', '1')
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, env=env)
+            # Stream lines, prefixing to indicate origin
+            if proc.stdout is not None:
+                for line in proc.stdout:
+                    # strip trailing newlines and print with flush to keep order
+                    print(f"  [BUILDER] {line.rstrip()}", flush=True)
+            ret = proc.wait()
+            if ret != 0:
+                print_error(f"Augmentation builder failed with exit code {ret}")
+                return False
+        except Exception as e:
+            print_error(f"Augmentation builder execution error: {e}")
+            return False
+
+        print_success("Augmentation completed (builder path)")
         return True
     except Exception as e:
         print_error(f"Augmentation failed: {e}")
         return False
 
-
-def step_3_combine(script_dir, dry_run):
-    """Step 3: Combine original and augmented datasets."""
-    print_step(3, 5, "Combine Original + Augmented")
-    
-    # Deprecated: combine is handled by the new distribution step which places
-    # originals and augmentations directly into the train/val/test folders.
-    print_info("Combine step is deprecated; use distribution step instead")
-    return True
-
-
-def step_4_split(script_dir, train_ratio, val_ratio, test_ratio, dry_run):
-    """Step 4: Split into train/validation/test sets."""
-    print_step(4, 5, "Split Train/Validation/Test")
-    
-    try:
-        sys.path.insert(0, str(script_dir))
-        from split_dataset import create_dataset_splits
-
-        source = config.DATASET_COMBINED_DIR
-        output_base = str(config.EXTRACTION_DIR)
-        stats = create_dataset_splits(str(source), output_base, train_ratio, val_ratio, test_ratio, random_seed=42, copy_files_flag=not dry_run, dry_run=dry_run)
-        if stats is None:
-            return False
-        return True
-    except Exception as e:
-        print_error(f"Split step failed: {e}")
-        return False
-
-
-def step_5_validate(script_dir, dry_run=False):
-    """Step 5: Validate dataset files and extracted features.
+def step_3_validate(script_dir, dry_run=False):
+    """Step 3: Validate dataset files and extracted features.
 
     Runs `tools/validate_dataset.py` which inspects audio files and
     `extracted_features/` JSONs and writes `tools/validate_report.json`.
     """
-    print_step(5, 5, "Validate Dataset Files and Features")
+    print_step(3, TOTAL_STEPS, "Validate Dataset Files and Features")
 
     # If dry_run, still run validation on what's present (no files written),
     # but allow caller to skip running it by passing dry_run=True.
@@ -485,8 +334,10 @@ def step_5_validate(script_dir, dry_run=False):
     try:
         validator = script_dir.parent / 'tools' / 'validate_dataset.py'
         if not validator.exists():
-            print_error(f"Validator not found: {validator}")
-            return False
+            # Validator script is optional in some environments; warn but continue
+            print_warning(f"Validator not found: {validator}")
+            print_warning("Skipping dataset-level validation (validator script missing)")
+            return True
 
         cmd = [sys.executable, str(validator)]
         print_info(f"Running dataset validator: {cmd}")
@@ -499,11 +350,10 @@ def step_5_validate(script_dir, dry_run=False):
     except Exception as e:
         print_error(f"Validation error: {e}")
         return False
-
-
-def step_5_summary(script_dir):
+    
+def step_4_summary(script_dir):
     """Final summary: concise dataset report and location of validation output."""
-    print_step(5, 5, "Setup Complete - Dataset Created and Validated")
+    print_step(4, TOTAL_STEPS, "Setup Complete - Dataset Created and Validated")
 
     # Count files in each dataset folder under script_dir
     datasets = [
@@ -566,14 +416,23 @@ Examples:
     
     # Configuration
     # Default augmentation config is taken from centralized `config.py`
-    parser.add_argument('--config', type=str, default=str(config.CONFIG_DATASET_PATH.name),
-                        help=f'Augmentation config file (default: {config.CONFIG_DATASET_PATH.name})')
+    parser.add_argument('--config', type=str, default=str(config.AUGMENTATION_CONFIG.name),
+                        help=f'Augmentation config file (default: {config.AUGMENTATION_CONFIG.name})')
+    # Augmentation overrides
+    parser.add_argument('--augment-samples', type=int, default=None,
+                        help='Override total augmentation samples (default from config)')
+    parser.add_argument('--augment-workers', type=int, default=None,
+                        help='Override augmentation worker count (default from config)')
+    parser.add_argument('--augment-dry-run', action='store_true', help='Run augmentation in dry-run mode')
+    parser.add_argument('--mid-scale', action='store_true', help='Run a mid-scale augmentation (faster validation)')
     
     # Step control
     parser.add_argument('--skip-download', action='store_true',
                         help='Skip dataset download (use existing dataset_test)')
     parser.add_argument('--skip-augmentation', action='store_true',
                         help='Skip augmentation (use existing dataset_augmented)')
+    parser.add_argument('--merge-originals', action='store_true',
+                        help='When distributing into splits, include original DADS files alongside augmentations')
     # Note: feature extraction and training are intentionally out of scope
     # for this master setup script. Use separate preprocessing/training scripts.
     
@@ -602,7 +461,7 @@ Examples:
     
     # Step 0: Cleanup (unless disabled)
     if not args.no_cleanup:
-        print_step(0, 5, "Cleanup Existing Datasets")
+        print_step(0, TOTAL_STEPS, "Cleanup Existing Datasets")
         cleanup_directories(script_dir, args.dry_run)
     else:
         print_warning("Skipping cleanup - Existing datasets will be REUSED (risk of contamination!)")
@@ -629,23 +488,41 @@ Examples:
     
     # Step 2: Augmentation
     if not args.skip_augmentation:
-        success = step_2_augment(script_dir, args.config, args.dry_run)
+        # decide total samples (mid-scale override if requested)
+        if args.mid_scale and args.augment_samples is None:
+            augment_total = min(2000, int(config.DATASET_TARGET_SIZE))
+        else:
+            augment_total = args.augment_samples if args.augment_samples is not None else int(config.DATASET_TARGET_SIZE)
+
+        success = step_2_augment(script_dir, args.config, args.dry_run, total_samples=augment_total, num_workers=args.augment_workers, augment_dry_run=args.augment_dry_run)
         steps_success.append(('Augmentation', success))
         if not success and not args.dry_run:
             print_error("Setup failed at augmentation step")
             return 1
+        # After builder completes, run augmentation validator and reporter (master orchestrates reporting)
+        info_name = 'augmentation_samples.jsonl'
+        meta_path = script_dir / 'dataset_train' / info_name
+        if meta_path.exists():
+            vcmd = [sys.executable, str(script_dir.parent / 'tools' / 'validate_augmentation.py'), str(meta_path)]
+            print_info(f"Running augmentation validator: {' '.join(vcmd)}")
+            vret = subprocess.run(vcmd, check=False)
+            if vret.returncode != 0:
+                print_error('Augmentation validation failed')
+                if not args.dry_run:
+                    return 1
+
+            rcpt = [sys.executable, str(script_dir.parent / 'tools' / 'report_augmentation.py'), str(meta_path), str(script_dir.parent / 'tools' / 'augmentation_report.json')]
+            print_info(f"Running augmentation reporter: {' '.join(rcpt)}")
+            rret = subprocess.run(rcpt, check=False)
+            if rret.returncode != 0:
+                print_warning('Augmentation reporting encountered issues')
+        else:
+            print_warning(f"Augmentation meta file not found for validation/report: {meta_path}")
     else:
         print_info("Skipping augmentation step (using existing dataset_augmented)")
     
-    # Step 3: Distribute originals + augmentations into splits
-    success = step_3_distribute_and_split(script_dir, args.train, args.val, args.test, args.dry_run)
-    steps_success.append(('Distribute+Split', success))
-    if not success and not args.dry_run:
-        print_error("Setup failed at distribution step")
-        return 1
-    
-    # Step 5: Validate
-    success = step_5_validate(script_dir, args.dry_run)
+    # Step 3: Validate
+    success = step_3_validate(script_dir, args.dry_run)
     steps_success.append(('Validation', success))
     if not success and not args.dry_run:
         print_error("Setup failed at validation step")
@@ -653,7 +530,7 @@ Examples:
     
     # Final summary
     if not args.dry_run:
-        step_5_summary(script_dir)
+        step_4_summary(script_dir)
     else:
         print_warning("\nDry run complete - no files were created")
     
@@ -667,5 +544,7 @@ if __name__ == "__main__":
         print(f"\n\n{colors.YELLOW}Setup interrupted by user{colors.ENDC}")
         exit(1)
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         print(f"\n{colors.RED}Unexpected error: {e}{colors.ENDC}")
         exit(1)

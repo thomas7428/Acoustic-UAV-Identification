@@ -73,6 +73,9 @@ if [ $DEFAULT_WORKERS -gt 8 ]; then
     DEFAULT_WORKERS=8
 fi
 WORKERS="$DEFAULT_WORKERS"
+AUGMENT_SAMPLES=""
+AUGMENT_WORKERS="$WORKERS"
+MID_SCALE=false
 
 # Check for --no-nohup flag first (before parsing other args)
 USE_NOHUP=true
@@ -156,6 +159,18 @@ while [[ $# -gt 0 ]]; do
             ;;
         --no-nohup)
             # Internal flag, already processed
+            shift
+            ;;
+        --augment-samples)
+            AUGMENT_SAMPLES="$2"
+            shift 2
+            ;;
+        --augment-workers)
+            AUGMENT_WORKERS="$2"
+            shift 2
+            ;;
+        --mid-scale)
+            MID_SCALE=true
             shift
             ;;
         --help)
@@ -384,7 +399,19 @@ prepare_dataset() {
     
     cd "$PROJECT_DIR/0 - DADS dataset extraction"
     
-    if ! "$VENV_PATH" master_setup_v2.py; then
+    # Build augmentation args
+    AUGMENT_ARGS=( )
+    if [ -n "$AUGMENT_SAMPLES" ]; then
+        AUGMENT_ARGS+=("--augment-samples" "$AUGMENT_SAMPLES")
+    fi
+    if [ -n "$AUGMENT_WORKERS" ]; then
+        AUGMENT_ARGS+=("--augment-workers" "$AUGMENT_WORKERS")
+    fi
+    if [ "$MID_SCALE" = true ]; then
+        AUGMENT_ARGS+=("--mid-scale")
+    fi
+
+    if ! "$VENV_PATH" "master_setup_v2.py" "${AUGMENT_ARGS[@]}"; then
         log ERROR "Dataset preparation failed"
         exit 1
     fi

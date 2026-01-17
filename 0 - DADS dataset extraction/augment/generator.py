@@ -22,6 +22,7 @@ from .modifiers import normalize as normalize_mod
 import os
 import multiprocessing as mp
 from typing import Dict, Any
+import time
 
 
 def process_task(task: Dict[str, Any]):
@@ -355,7 +356,7 @@ def _sha256(path: Path):
     return h.hexdigest()
 
 
-def run_build(build_config_path: str, out_dir: str, dry_run=False, show_progress=False, total=None, seed=None):
+def run_build(build_config_path: str, out_dir: str, dry_run=False, show_progress=False, total=None, seed=None, num_workers=None):
     cfg_path = Path(build_config_path)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -375,7 +376,13 @@ def run_build(build_config_path: str, out_dir: str, dry_run=False, show_progress
         meta.write_text('', encoding='utf-8')
 
     # determine totals (use total_samples and split_ratio)
+    # allow caller override via `total` argument
     total_samples = int(cfg.get('output', {}).get('total_samples', 20))
+    if total is not None:
+        try:
+            total_samples = int(total)
+        except Exception:
+            pass
     split_ratio = cfg.get('output', {}).get('split_ratio', [0.8, 0.1, 0.1])
 
     def _counts(total):
@@ -515,37 +522,84 @@ def run_build(build_config_path: str, out_dir: str, dry_run=False, show_progress
 
     # worker function runs as top-level `process_task` so it's pickleable by multiprocessing
 
-    # choose number of workers
-    num_workers = int(cfg.get('advanced', {}).get('num_workers', max(1, (os.cpu_count() or 1))))
-    if num_workers <= 1:
-        # sequential
-        results = [process_task(t) for t in tasks]
+    # choose number of workers (allow caller override via `num_workers` arg)
+    if num_workers is None:
+        num_workers = int(cfg.get('advanced', {}).get('num_workers', max(1, (os.cpu_count() or 1))))
     else:
-        with mp.Pool(processes=num_workers) as pool:
-            results = list(pool.imap_unordered(process_task, tasks))
+        try:
+            num_workers = int(num_workers)
+        except Exception:
+            num_workers = int(cfg.get('advanced', {}).get('num_workers', max(1, (os.cpu_count() or 1))))
 
     # main process writes outputs and metadata
+    total_tasks = len(tasks)
+    start_ts = time.time()
     written = 0
-    for r in results:
-        if r is None:
-            continue
-        if 'error' in r:
-            # skip or record error in build_info
-            continue
-        split = r['split']
-        writer = writers.get(split)
-        p = writer.write_wav(str(r['label']), r['filename'], r['processed_audio'], sr)
-        debug_meta = {'master_seed': master_seed}
-        debug_meta.update(r.get('debug', {}) if isinstance(r.get('debug', {}), dict) else {})
-        if r.get('offline_source'):
-            try:
-                from pathlib import Path as _P
-                debug_meta['offline_source'] = _P(r.get('offline_source')).name
-            except Exception:
-                debug_meta['offline_source'] = r.get('offline_source')
-        writer.append_jsonl(r['train_meta'], debug_meta)
-        written += 1
+    errors = 0
+    written_per_split = {}
 
+    # helper to format ETA
+    def _format_eta(remaining, rate):
+        if rate <= 0:
+            return '??:??:??'
+        secs = int(remaining / rate)
+        return time.strftime('%H:%M:%S', time.gmtime(secs))
+
+    # progress reporting thresholds (every 5%)
+    pct_step = 5
+    next_pct = pct_step
+
+    # create iterator of results so we can stream and report progress
+    iterator = None
+    pool = None
+    try:
+        if num_workers <= 1:
+            iterator = (process_task(t) for t in tasks)
+        else:
+            pool = mp.Pool(processes=num_workers)
+            iterator = pool.imap_unordered(process_task, tasks)
+
+        for r in iterator:
+            # handle interruptible cancellation gracefully
+            if r is None:
+                continue
+            if 'error' in r:
+                errors += 1
+                continue
+            split = r['split']
+            writer = writers.get(split)
+            try:
+                writer.write_wav(str(r['label']), r['filename'], r['processed_audio'], sr)
+                debug_meta = {'master_seed': master_seed}
+                debug_meta.update(r.get('debug', {}) if isinstance(r.get('debug', {}), dict) else {})
+                if r.get('offline_source'):
+                    try:
+                        from pathlib import Path as _P
+                        debug_meta['offline_source'] = _P(r.get('offline_source')).name
+                    except Exception:
+                        debug_meta['offline_source'] = r.get('offline_source')
+                writer.append_jsonl(r['train_meta'], debug_meta)
+                written += 1
+                written_per_split[split] = written_per_split.get(split, 0) + 1
+            except Exception:
+                errors += 1
+
+            # report progress every pct_step
+            pct_done = (written / total_tasks) * 100 if total_tasks > 0 else 100.0
+            if pct_done >= next_pct or written == total_tasks:
+                elapsed = time.time() - start_ts
+                rate = written / elapsed if elapsed > 0 else 0.0
+                remaining = max(0, total_tasks - written)
+                eta = _format_eta(remaining, rate)
+                print(f"[PROGRESS] {int(pct_done)}% — {written}/{total_tasks} written — ETA {eta} — {rate:.2f} samples/s")
+                sys.stdout.flush()
+                next_pct += pct_step
+    finally:
+        if pool is not None:
+            pool.close()
+            pool.join()
+
+    # main process finished writing — summarize results
     build_info = {
         'dataset_id': out.name,
         'generator': 'augment.generator',
@@ -559,4 +613,29 @@ def run_build(build_config_path: str, out_dir: str, dry_run=False, show_progress
     }
 
     atomic_write_json(out / 'build_info.json', build_info)
+    # human-friendly summary
+    try:
+        print('\n' + '='*72)
+        print(' AUGMENTATION BUILD SUMMARY'.center(72))
+        print('='*72)
+        print(f"Output root: {out}")
+        print(f"Build config: {cfg_path}")
+        print(f"Requested total samples: {total_samples}")
+        print(f"Tasks created: {total_tasks}")
+        print(f"Successfully written: {written}")
+        for s in splits:
+            cnt = written_per_split.get(s, 0)
+            print(f"  - {s}: {cnt}")
+        print(f"Errors during generation: {errors}")
+        print('\nMetadata files:')
+        for s in splits:
+            print(f"  - {(out / s / info_name)}")
+        print(f"Build info: {(out / 'build_info.json')}")
+        aug_report = Path(__file__).resolve().parents[2] / 'tools' / 'augmentation_report.json'
+        if aug_report.exists():
+            print(f"Augmentation report: {aug_report}")
+        print('='*72 + '\n')
+    except Exception:
+        pass
+
     return 0
