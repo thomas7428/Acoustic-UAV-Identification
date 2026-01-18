@@ -1,6 +1,7 @@
 from pathlib import Path
 import json
 import sys
+import logging
 from datetime import datetime, timezone
 import hashlib
 
@@ -31,215 +32,132 @@ def process_task(task: Dict[str, Any]):
         from .rng import rng_for_key as _rng_for_key
         from tools.audio_utils import load_audio_file as _load_audio_file
         from .modifiers import normalize as _normalize_mod
-        from .modifiers import environment as _env_mod
-        from .distance import apply as _distance_apply
-        from . import pipeline as _pipeline
-        import numpy as _np
-
-        rng = _rng_for_key(task['master_seed'], task['seed_key'])
-
-        cfg = task.get('cfg', {})
-        dist_cfg = cfg.get('distance', {}) if isinstance(cfg, dict) else {}
-        ref = float(dist_cfg.get('ref_m', 1.0))
-        alpha = float(dist_cfg.get('alpha', 1.8))
-
-        def _atten_linear_from_dist(d):
-            import math
-            att_dB = -20.0 * alpha * math.log10(max(d / ref, 1e-6))
-            return float(10 ** (att_dB / 20.0)), float(att_dB)
-
-        # collect scenario distances from task
-        scenario = task.get('scenario', {})
-        drones_ds = scenario.get('drones', []) if isinstance(scenario, dict) else []
-        ambients_ds = scenario.get('ambients', []) if isinstance(scenario, dict) else []
-
-        # pools
-        pool_drone = list(task.get('offline_pool_label_1', []))
-        pool_ambient = list(task.get('offline_pool_label_0', []))
-
-        # load and assemble drone mix
-        drone_parts = []
-        drone_debug = []
-        for idx, ddist in enumerate(drones_ds):
-            if not pool_drone:
-                break
+        # Initialize commonly-used variables so worker exceptions are informative
+        # and NameError doesn't occur when some paths do not set these values.
+        rng = None
+        try:
+            rng = _rng_for_key(globals().get('master_seed', 0), task.get('seed_key') if isinstance(task, dict) else '')
+        except Exception:
             try:
-                src = rng.choice(pool_drone)
-                src_audio = _load_audio_file(src, task['sr'], duration=task['duration'])
-                if src_audio is None:
-                    continue
-                # normalize source
-                src_audio, nd = _normalize_mod.apply(src_audio, task['sr'], rng, task['train_meta'], task['cfg'])
-                # apply pre-source reverb if requested in scenario
-                rdbg = None
-                try:
-                    rev_cfg = None
-                    if isinstance(scenario, dict) and scenario.get('reverb') is not None:
-                        rev_cfg = scenario.get('reverb')
-                    elif isinstance(task.get('cfg', {}), dict) and task['cfg'].get('reverb') is not None:
-                        rev_cfg = task['cfg'].get('reverb')
-                    if rev_cfg is not None and rev_cfg.get('mode') == 'pre':
-                        # deterministic per-source reverb RNG
-                        src_rng = _rng_for_key(task['master_seed'], task['seed_key'] + f':reverb:drone:{idx}')
-                        meta_rev = dict(task.get('train_meta', {}))
-                        meta_rev['reverb'] = rev_cfg
-                        src_audio, rdbg = _reverb_mod.apply(src_audio, task['sr'], src_rng, meta_rev, task['cfg'])
-                except Exception:
-                    rdbg = None
-                # apply environment wrapper (movement, appearance, chained modifiers)
-                envdbg = None
-                try:
-                    env_cfg = None
-                    if isinstance(scenario, dict) and scenario.get('environment') is not None:
-                        env_cfg = scenario.get('environment')
-                    elif isinstance(task.get('cfg', {}), dict) and task['cfg'].get('environment') is not None:
-                        env_cfg = task['cfg'].get('environment')
-                    if env_cfg is not None:
-                        src_rng_env = _rng_for_key(task['master_seed'], task['seed_key'] + f':env:drone:{idx}')
-                        meta_env = dict(task.get('train_meta', {}))
-                        env_audio, envdbg = _env_mod.apply(src_audio, task['sr'], src_rng_env, meta_env, env_cfg)
-                        # replace audio only if returned
-                        if env_audio is not None:
-                            src_audio = env_audio
-                except Exception:
-                    envdbg = None
-                gain, att_db = _atten_linear_from_dist(float(ddist))
-                drone_parts.append((src_audio, gain))
-                # store only filename for readability in JSONL
-                try:
-                    from pathlib import Path as _P
-                    src_name = _P(src).name
-                except Exception:
-                    src_name = src
-                entry = {'src': src_name, 'distance_m': float(ddist), 'atten_dB': att_db}
-                if rdbg is not None:
-                    entry['reverb_debug'] = rdbg
-                if envdbg is not None:
-                    entry['env_debug'] = envdbg
-                drone_debug.append(entry)
+                rng = _rng_for_key(globals().get('master_seed', 0), '')
             except Exception:
-                continue
+                rng = None
 
-        import numpy as _np
-        def _mix_parts(parts):
-            if not parts:
-                return None
-            lengths = [p[0].size for p in parts if p[0] is not None]
-            if not lengths:
-                return None
-            L = max(lengths)
-            out = _np.zeros(L, dtype=float)
-            for a, g in parts:
-                aa = a.astype(float)
-                if aa.size < L:
-                    aa = _np.pad(aa, (0, L - aa.size))
-                out += aa * float(g)
-            return out
-
-        base_audio = _mix_parts(drone_parts)
-
-        # prepare ambient mix_sources list
-        mix_sources = []
-        ambient_debug = []
-        # If scenario specifies snr_db, we will ignore ambient distances and let mix.apply
-        # scale ambient gains to meet the SNR relative to the strongest drone.
-        scenario_snr = None
-        if isinstance(scenario, dict) and 'snr_db' in scenario:
+        base_audio = None
+        # ensure `scenario` is defined to avoid NameError when referenced later
+        scenario = task.get('scenario') if isinstance(task, dict) else None
+        # load offline source audio if provided (so generated samples are not silent)
+        if isinstance(task, dict) and task.get('offline_src'):
             try:
-                scenario_snr = float(scenario.get('snr_db'))
-            except Exception:
-                scenario_snr = None
-
-        for idx, adist in enumerate(ambients_ds):
-            if not pool_ambient:
-                break
-            try:
-                src = rng.choice(pool_ambient)
-                src_audio = _load_audio_file(src, task['sr'], duration=task['duration'])
-                if src_audio is None:
-                    continue
-                src_audio, nd = _normalize_mod.apply(src_audio, task['sr'], rng, task['train_meta'], task['cfg'])
-                # apply pre-source reverb if requested in scenario
-                rdbg = None
-                try:
-                    rev_cfg = None
-                    if isinstance(scenario, dict) and scenario.get('reverb') is not None:
-                        rev_cfg = scenario.get('reverb')
-                    elif isinstance(task.get('cfg', {}), dict) and task['cfg'].get('reverb') is not None:
-                        rev_cfg = task['cfg'].get('reverb')
-                    if rev_cfg is not None and rev_cfg.get('mode') == 'pre':
-                        src_rng = _rng_for_key(task['master_seed'], task['seed_key'] + f':reverb:ambient:{idx}')
-                        meta_rev = dict(task.get('train_meta', {}))
-                        meta_rev['reverb'] = rev_cfg
-                        src_audio, rdbg = _reverb_mod.apply(src_audio, task['sr'], src_rng, meta_rev, task['cfg'])
-                except Exception:
-                    rdbg = None
-                # apply environment wrapper (movement, appearance, chained modifiers)
-                envdbg = None
-                try:
-                    env_cfg = None
-                    if isinstance(scenario, dict) and scenario.get('environment') is not None:
-                        env_cfg = scenario.get('environment')
-                    elif isinstance(task.get('cfg', {}), dict) and task['cfg'].get('environment') is not None:
-                        env_cfg = task['cfg'].get('environment')
-                    if env_cfg is not None:
-                        src_rng_env = _rng_for_key(task['master_seed'], task['seed_key'] + f':env:ambient:{idx}')
-                        meta_env = dict(task.get('train_meta', {}))
-                        env_audio, envdbg = _env_mod.apply(src_audio, task['sr'], src_rng_env, meta_env, env_cfg)
-                        if env_audio is not None:
-                            src_audio = env_audio
-                except Exception:
-                    envdbg = None
-
-                if scenario_snr is not None:
-                    # initial gain placeholder; actual scaling will be done by mix.apply
-                    gain = 1.0
-                    try:
-                        from pathlib import Path as _P
-                        src_name = _P(src).name
-                    except Exception:
-                        src_name = src
-                    entry = {'src': src_name, 'distance_m': float(adist), 'atten_dB': None, 'note': 'distance ignored due to snr_db'}
-                    if rdbg is not None:
-                        entry['reverb_debug'] = rdbg
-                    if envdbg is not None:
-                        entry['env_debug'] = envdbg
-                    ambient_debug.append(entry)
-                else:
-                    gain, att_db = _atten_linear_from_dist(float(adist))
-                    try:
-                        from pathlib import Path as _P
-                        src_name = _P(src).name
-                    except Exception:
-                        src_name = src
-                    entry = {'src': src_name, 'distance_m': float(adist), 'atten_dB': att_db}
-                    if rdbg is not None:
-                        entry['reverb_debug'] = rdbg
-                    if envdbg is not None:
-                        entry['env_debug'] = envdbg
-                    ambient_debug.append(entry)
-                mix_sources.append({'audio': src_audio, 'gain': float(gain), 'distance_m': (float(adist) if adist is not None else None), 'src_name': src_name})
-            except Exception:
-                continue
-
-        # if no drone parts and we have a single offline_src (legacy), try to load it
-        if base_audio is None and task.get('offline_src'):
-            try:
-                base_audio = _load_audio_file(task['offline_src'], task['sr'], duration=task['duration'])
-                if base_audio is not None:
-                    base_audio, nd = _normalize_mod.apply(base_audio, task['sr'], rng, task['train_meta'], task['cfg'])
+                base_audio = _load_audio_file(task.get('offline_src'), task.get('sr'))
             except Exception:
                 base_audio = None
+        # prepare a deterministic ambient/drone offline pool so we can assemble mix_sources
+        try:
+            offline_dir = globals().get('out') / 'dataset_DADS_offline'
+            if offline_dir is not None and offline_dir.exists():
+                # build pools per label (0=ambient,1=drone)
+                pool0 = []
+                pool1 = []
+                for ext in ('*.wav', '*.flac', '*.ogg'):
+                    pool0.extend([str(p) for p in (offline_dir / '0').rglob(ext)]) if (offline_dir / '0').exists() else None
+                    pool1.extend([str(p) for p in (offline_dir / '1').rglob(ext)]) if (offline_dir / '1').exists() else None
+                # fallback: scan root offline dir and split by filename containing _0_ or _1_
+                if not pool0 or not pool1:
+                    files = []
+                    for ext in ('*.wav', '*.flac', '*.ogg'):
+                        files.extend(list(Path(offline_dir).rglob(ext)))
+                    for p in files:
+                        n = p.name
+                        if f"_0_" in n:
+                            pool0.append(str(p))
+                        if f"_1_" in n:
+                            pool1.append(str(p))
+                offline_pool_label = {0: pool0, 1: pool1}
+            else:
+                offline_pool_label = {0: [], 1: []}
+        except Exception:
+            offline_pool_label = {0: [], 1: []}
+        drone_parts = []
+        drone_debug = []
+        ambient_debug = []
+        mix_meta = {}
+        mix_sources = []
+        scenario_snr = None
 
-        # assemble meta for mix.apply
-        mix_meta = dict(task.get('train_meta', {}))
-        mix_meta['mix_sources'] = mix_sources
-
-        # call pure-array mixer
+        # allocations are consumed by the main process; workers receive a single task to process
         mix_debug = {}
         try:
             from .modifiers import mix as _mix_mod
             from .modifiers import reverb as _reverb_mod
+            # If we have a base audio (offline sample) and an ambient pool, pick an ambient
+            try:
+                if base_audio is not None and isinstance(task, dict):
+                    # pick one ambient deterministically for this task
+                    pool_label = offline_pool_label.get(0, [])
+                    if pool_label:
+                        try:
+                            pick_rng = _rng_for_key(globals().get('master_seed', 0), task.get('seed_key', '') + ':ambient_pick')
+                            ambient_path = str(pick_rng.choice(pool_label))
+                            ambient_audio = _load_audio_file(ambient_path, task.get('sr'))
+                            if ambient_audio is not None:
+                                mix_sources.append({'audio': ambient_audio, 'gain': 1.0})
+                                ambient_debug.append({'source': Path(ambient_path).name})
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+            # assemble drone parts and additional ambients from the `scenario` definition
+            try:
+                if isinstance(scenario, dict):
+                    # drones
+                    for di, _ in enumerate(scenario.get('drones', []) if isinstance(scenario.get('drones', []), list) else []):
+                        pool_drone = offline_pool_label.get(1, [])
+                        if not pool_drone:
+                            break
+                        try:
+                            pick_rng = _rng_for_key(globals().get('master_seed', 0), task.get('seed_key', '') + f':drone_pick:{di}')
+                            drone_path = str(pick_rng.choice(pool_drone))
+                            drone_audio = _load_audio_file(drone_path, task.get('sr'))
+                            if drone_audio is None:
+                                continue
+                            try:
+                                from .distance import apply as _distance_apply
+                                processed_drone, ddbg = _distance_apply(drone_audio, task.get('sr'), pick_rng, {}, task.get('cfg', {}))
+                            except Exception:
+                                processed_drone = drone_audio
+                                ddbg = {}
+                            drone_parts.append((processed_drone, 1.0))
+                            entry = {'source': Path(drone_path).name}
+                            if isinstance(ddbg, dict):
+                                entry.update(ddbg)
+                            drone_debug.append(entry)
+                        except Exception:
+                            continue
+
+                    # ambients (additional to any base_audio)
+                    for ai, _ in enumerate(scenario.get('ambients', []) if isinstance(scenario.get('ambients', []), list) else []):
+                        pool_amb = offline_pool_label.get(0, [])
+                        if not pool_amb:
+                            break
+                        try:
+                            pick_rng = _rng_for_key(globals().get('master_seed', 0), task.get('seed_key', '') + f':ambient_pick:{ai}')
+                            amb_path = str(pick_rng.choice(pool_amb))
+                            amb_audio = _load_audio_file(amb_path, task.get('sr'))
+                            if amb_audio is None:
+                                continue
+                            mix_sources.append({'audio': amb_audio, 'gain': 1.0})
+                            ambient_debug.append({'source': Path(amb_path).name})
+                        except Exception:
+                            continue
+
+                    # scenario-level SNR override
+                    if scenario.get('snr_db') is not None:
+                        scenario_snr = scenario.get('snr_db')
+            except Exception:
+                pass
+
             if scenario_snr is not None and base_audio is not None and drone_parts:
                 # find the strongest drone (max rms * gain)
                 strongest = None
@@ -252,6 +170,8 @@ def process_task(task: Dict[str, Any]):
                 ref_audio = strongest[0] if strongest is not None else base_audio
                 # ask mix.apply to scale ambients to meet target SNR relative to ref_audio
                 mix_meta['target_snr_db'] = float(scenario_snr)
+                # ensure mix.apply knows which ambient sources to mix/scale
+                mix_meta['mix_sources'] = mix_sources
                 processed_ref_sum, mix_debug = _mix_mod.apply(ref_audio, task['sr'], rng, mix_meta, task['cfg'])
                 # extract scaled ambient (processed_ref_sum - ref_audio)
                 import numpy as _np
@@ -287,6 +207,8 @@ def process_task(task: Dict[str, Any]):
                         ambient_scaled = _np.pad(ambient_scaled, (0, L2 - ambient_scaled.size))
                     processed_audio = ba + ambient_scaled
             else:
+                # ensure mix.apply receives the assembled ambient sources
+                mix_meta['mix_sources'] = mix_sources
                 processed_audio, mix_debug = _mix_mod.apply(base_audio, task['sr'], rng, mix_meta, task['cfg'])
         except Exception as e:
             # fallback: naive sum
@@ -340,7 +262,18 @@ def process_task(task: Dict[str, Any]):
             'offline_source': task.get('offline_src'),
         }
     except Exception as e:
-        return {'error': str(e), 'task': task}
+        # Return a compact task summary to avoid huge log dumps when tasks contain large lists
+        summary = None
+        try:
+            summary = {
+                'filename': task.get('filename'),
+                'split': task.get('split'),
+                'label': task.get('label'),
+                'seed_key': task.get('seed_key'),
+            }
+        except Exception:
+            summary = None
+        return {'error': str(e), 'task_summary': summary}
 
 
 def _sha256(path: Path):
@@ -356,13 +289,19 @@ def _sha256(path: Path):
     return h.hexdigest()
 
 
-def run_build(build_config_path: str, out_dir: str, dry_run=False, show_progress=False, total=None, seed=None, num_workers=None):
+def run_build(build_config_path: str, out_dir: str, dry_run=False, show_progress=False, total=None, seed=None, num_workers=None, quiet=False):
     cfg_path = Path(build_config_path)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
     cfg = json.loads(cfg_path.read_text(encoding='utf-8'))
     validate_build_config(cfg_path, cfg)
+
+    # configure logging according to quiet flag
+    if quiet:
+        logging.basicConfig(level=logging.WARNING, format='%(message)s')
+    else:
+        logging.basicConfig(level=logging.INFO, format='%(message)s')
 
     info_name = cfg.get('output', {}).get('info_filename', 'augmentation_samples.jsonl')
 
@@ -400,7 +339,47 @@ def run_build(build_config_path: str, out_dir: str, dry_run=False, show_progress
     duration = float(cfg.get('audio_parameters', {}).get('target_duration_sec', cfg.get('audio_parameters', {}).get('duration_s', 4.0)))
     class_props = cfg.get('class_proportions', {'drone': 0.5, 'no_drone': 0.5})
 
-    # Build task list for workers; main process will perform atomic writes and JSONL appends
+    # expose key variables as module-level globals so worker `process_task` can access them
+    # this relies on fork semantics on Linux; it's acceptable for this project
+    globals()['cfg'] = cfg
+    globals()['splits'] = splits
+    globals()['master_seed'] = master_seed
+    globals()['sr'] = sr
+    globals()['duration'] = duration
+    globals()['out'] = out
+
+    # Generate deterministic allocations and build the exact task list from them.
+    try:
+        from .compute_allocations import compute_allocations as _compute_allocations
+        alloc_path = _compute_allocations(cfg_path, None, total_override=total_samples)
+        allocations = json.loads(Path(alloc_path).read_text(encoding='utf-8'))
+    except Exception as e:
+        raise SystemExit(f"Failed to compute/load allocations.json: {e}")
+
+    # validate allocations splits match our expected splits
+    meta = allocations.get('meta', {})
+    alloc_splits = meta.get('splits') if isinstance(meta, dict) else None
+    if alloc_splits is None or list(alloc_splits) != list(splits):
+        hint = (
+            f"allocations.json splits {alloc_splits} do not match expected splits {list(splits)}\n"
+            f"allocations file: {alloc_path}\n"
+            "Possible fixes:\n"
+            "  - Add explicit split names in your build config under `output.splits`, e.g.\n"
+            "      \"output\": { \"splits\": [\"dataset_train\", \"dataset_val\", \"dataset_test\"] }\n"
+            "  - Or regenerate `allocations.json` by running `python augment/compute_allocations.py --config build_config.json --total 1000`\n"
+            "The generator requires deterministic allocations that use the canonical dataset split names.\n"
+        )
+        raise SystemExit(hint)
+
+    # Map expected output split names to allocation keys.
+    # We enforce canonical split names in allocations.json, so this is an identity mapping.
+    expected_to_alloc = {s: s for s in splits}
+
+    # consume allocations to create deterministic tasks: per-split, per-scenario counts
+    alloc_scenarios = allocations.get('scenarios', {})
+    scenarios = cfg.get('augmentation_scenarios', []) if isinstance(cfg, dict) else []
+    scenario_names = [ (s.get('name') if isinstance(s, dict) else None) or (s.get('id') if isinstance(s, dict) else None) or f"scn_{i}" for i, s in enumerate(scenarios) ]
+
     global_idx = 0
     tasks = []
     offline_dir = out / 'dataset_DADS_offline'
@@ -409,113 +388,63 @@ def run_build(build_config_path: str, out_dir: str, dry_run=False, show_progress
     if offline_dir.exists():
         for ext in ('*.wav', '*.flac', '*.ogg'):
             offline_files_all.extend(list(offline_dir.rglob(ext)))
-        # collect per-label pools (strings)
         for lbl in (0, 1):
             lbl_dir = offline_dir / str(lbl)
             if lbl_dir.exists():
                 for ext in ('*.wav', '*.flac', '*.ogg'):
                     offline_pool_label[lbl].extend([str(p) for p in lbl_dir.rglob(ext)])
             else:
-                # fallback: use all files filtered by filename containing label prefix
                 offline_pool_label[lbl].extend([str(p) for p in offline_files_all if f"_{lbl}_" in p.name])
 
-    # Build tasks by total samples and split counts; scenarios chosen per-sample
-    idx_map = {s: i for i, s in enumerate(splits)}
-    global_idx = 0
-    for split_name, n in zip(splits, per_split_counts):
-        for i in range(n):
-            seed_key = f"sample:{global_idx}"
-            filename = f"dads_sample_{global_idx:06d}.wav"
-
-            # choose class deterministically according to class_proportions
-            class_label = 0
-            class_name = 'no_drone'
+    for split_name in splits:
+        for i, scn in enumerate(scenarios):
+            scn_name = scenario_names[i]
+            sc_entry = alloc_scenarios.get(scn_name) or alloc_scenarios.get(str(i))
+            if not sc_entry:
+                continue
+            # look up allocation count using mapped allocation split name
+            alloc_split_name = expected_to_alloc.get(split_name)
             try:
-                props = class_props if isinstance(class_props, dict) else {'drone': 0.5, 'no_drone': 0.5}
-                pd = float(props.get('drone', 0.5))
-                pn = float(props.get('no_drone', 1.0 - pd))
-                rng_cls = rng_for_key(master_seed, seed_key + ':class')
-                r = float(rng_cls.random())
-                total = pd + pn
-                p_drone = pd / total if total > 0 else 0.5
-                if r <= p_drone:
-                    class_label = 1
-                    class_name = 'drone'
-                else:
-                    class_label = 0
-                    class_name = 'no_drone'
+                count = int(sc_entry.get('per_split', {}).get(alloc_split_name, 0))
             except Exception:
-                class_label = 0
-                class_name = 'no_drone'
+                count = 0
+            has_drone = bool(scn.get('drones')) if isinstance(scn, dict) else False
+            class_label = 1 if has_drone else 0
+            class_name = 'drone' if has_drone else 'no_drone'
+            for j in range(count):
+                seed_key_full = f"{class_name}:{split_name}:{global_idx}"
+                filename = f"dads_sample_{global_idx:06d}.wav"
+                train_meta = {
+                    'filename': str(Path(str(class_label)) / filename),
+                    'label': class_label,
+                    'class_name': class_name,
+                    'seed_key': seed_key_full,
+                    'split': split_name,
+                }
+                src = None
+                pool_label = offline_pool_label.get(class_label, [])
+                if pool_label:
+                    try:
+                        rng_pick = rng_for_key(master_seed, seed_key_full + ':pick')
+                        src = str(rng_pick.choice(pool_label))
+                    except Exception:
+                        src = None
 
-            # choose a scenario among those matching the class (scenarios may be drone or ambient)
-            scenarios = cfg.get('augmentation_scenarios', []) if isinstance(cfg, dict) else []
-            scenario = None
-            if scenarios:
-                try:
-                    # filter scenarios by whether they contain drones
-                    cand = []
-                    for s in scenarios:
-                        has_drone = bool(s.get('drones')) if isinstance(s, dict) else False
-                        if (class_label == 1 and has_drone) or (class_label == 0 and not has_drone):
-                            cand.append(s)
-                    if not cand:
-                        cand = scenarios
-                    rng_scn = rng_for_key(master_seed, seed_key + ':scenario')
-                    props = [float(s.get('proportion', 0.0)) for s in cand]
-                    totalp = sum(props)
-                    if totalp <= 0:
-                        idx = int(rng_scn.integers(0, len(cand)))
-                    else:
-                        probs = [p / totalp for p in props]
-                        r = float(rng_scn.random())
-                        cum = 0.0
-                        idx = 0
-                        for j, p in enumerate(probs):
-                            cum += p
-                            if r <= cum:
-                                idx = j
-                                break
-                    scenario = cand[idx]
-                except Exception:
-                    scenario = None
-
-            seed_key_full = f"{class_name}:{split_name}:{i}"
-            train_meta = {
-                'filename': str(Path(str(class_label)) / filename),
-                'label': class_label,
-                'class_name': class_name,
-                'seed_key': seed_key_full,
-                'split': split_name,
-            }
-
-            # deterministic primary offline source candidate for legacy cases
-            src = None
-            pool_label = offline_pool_label.get(class_label, [])
-            if pool_label:
-                try:
-                    rng_pick = rng_for_key(master_seed, seed_key_full + ':pick')
-                    src = str(rng_pick.choice(pool_label))
-                except Exception:
-                    src = None
-
-            tasks.append({
-                'master_seed': master_seed,
-                'seed_key': seed_key_full,
-                'label': class_label,
-                'class_name': class_name,
-                'filename': filename,
-                'split': split_name,
-                'offline_src': src,
-                'offline_pool_label_0': offline_pool_label[0],
-                'offline_pool_label_1': offline_pool_label[1],
-                'scenario': scenario,
-                'train_meta': train_meta,
-                'sr': sr,
-                'duration': duration,
-                'cfg': cfg,
-            })
-            global_idx += 1
+                tasks.append({
+                    'master_seed': master_seed,
+                    'seed_key': seed_key_full,
+                    'label': class_label,
+                    'class_name': class_name,
+                    'filename': filename,
+                    'split': split_name,
+                    'offline_src': src,
+                    'scenario': scn,
+                    'train_meta': train_meta,
+                    'sr': sr,
+                    'duration': duration,
+                    'cfg': cfg,
+                })
+                global_idx += 1
 
     # prepare writers for main process
     writers = {s: SplitWriter(out / s, meta_name=info_name) for s in splits}
@@ -565,6 +494,24 @@ def run_build(build_config_path: str, out_dir: str, dry_run=False, show_progress
                 continue
             if 'error' in r:
                 errors += 1
+                try:
+                    err = r.get('error')
+                    # prefer compact summary produced by worker
+                    task_info = r.get('task_summary') or (r.get('task') if isinstance(r.get('task'), dict) else {})
+                    # ensure task_info is compact for logging
+                    if isinstance(task_info, dict):
+                        task_summary = {
+                            'filename': task_info.get('filename'),
+                            'split': task_info.get('split'),
+                            'label': task_info.get('label'),
+                            'seed_key': task_info.get('seed_key'),
+                        }
+                    else:
+                        task_summary = None
+                    seed = task_summary.get('seed_key') if isinstance(task_summary, dict) else None
+                    logging.error("[ERROR] %s -- seed=%s -- task=%s", err, seed, task_summary)
+                except Exception:
+                    pass
                 continue
             split = r['split']
             writer = writers.get(split)
@@ -591,8 +538,7 @@ def run_build(build_config_path: str, out_dir: str, dry_run=False, show_progress
                 rate = written / elapsed if elapsed > 0 else 0.0
                 remaining = max(0, total_tasks - written)
                 eta = _format_eta(remaining, rate)
-                print(f"[PROGRESS] {int(pct_done)}% — {written}/{total_tasks} written — ETA {eta} — {rate:.2f} samples/s")
-                sys.stdout.flush()
+                logging.info("[PROGRESS] %d%% — %d/%d written — ETA %s — %.2f samples/s", int(pct_done), written, total_tasks, eta, rate)
                 next_pct += pct_step
     finally:
         if pool is not None:
@@ -613,28 +559,28 @@ def run_build(build_config_path: str, out_dir: str, dry_run=False, show_progress
     }
 
     atomic_write_json(out / 'build_info.json', build_info)
-    # human-friendly summary
+    # human-friendly summary (logged so it can be silenced)
     try:
-        print('\n' + '='*72)
-        print(' AUGMENTATION BUILD SUMMARY'.center(72))
-        print('='*72)
-        print(f"Output root: {out}")
-        print(f"Build config: {cfg_path}")
-        print(f"Requested total samples: {total_samples}")
-        print(f"Tasks created: {total_tasks}")
-        print(f"Successfully written: {written}")
+        logging.info('\n' + '='*72)
+        logging.info(' AUGMENTATION BUILD SUMMARY')
+        logging.info('='*72)
+        logging.info('Output root: %s', out)
+        logging.info('Build config: %s', cfg_path)
+        logging.info('Requested total samples: %d', total_samples)
+        logging.info('Tasks created: %d', total_tasks)
+        logging.info('Successfully written: %d', written)
         for s in splits:
             cnt = written_per_split.get(s, 0)
-            print(f"  - {s}: {cnt}")
-        print(f"Errors during generation: {errors}")
-        print('\nMetadata files:')
+            logging.info('  - %s: %d', s, cnt)
+        logging.info('Errors during generation: %d', errors)
+        logging.info('\nMetadata files:')
         for s in splits:
-            print(f"  - {(out / s / info_name)}")
-        print(f"Build info: {(out / 'build_info.json')}")
+            logging.info('  - %s', (out / s / info_name))
+        logging.info('Build info: %s', (out / 'build_info.json'))
         aug_report = Path(__file__).resolve().parents[2] / 'tools' / 'augmentation_report.json'
         if aug_report.exists():
-            print(f"Augmentation report: {aug_report}")
-        print('='*72 + '\n')
+            logging.info('Augmentation report: %s', aug_report)
+        logging.info('='*72 + '\n')
     except Exception:
         pass
 

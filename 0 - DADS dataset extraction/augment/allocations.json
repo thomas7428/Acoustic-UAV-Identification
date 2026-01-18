@@ -1,0 +1,95 @@
+{
+  "meta": {
+    "total_samples": 1000,
+    "splits": [
+      "dataset_train",
+      "dataset_val",
+      "dataset_test"
+    ],
+    "split_ratio": [
+      0.7,
+      0.15,
+      0.15
+    ],
+    "master_seed": 42
+  },
+  "scenarios": {
+    "ambient_only": {
+      "total": 172,
+      "per_split": {
+        "dataset_train": 120,
+        "dataset_val": 26,
+        "dataset_test": 26
+      },
+      "weight": 0.25
+    },
+    "single_drone_close_snr": {
+      "total": 172,
+      "per_split": {
+        "dataset_train": 120,
+        "dataset_val": 26,
+        "dataset_test": 26
+      },
+      "weight": 0.25
+    },
+    "single_drone_close": {
+      "total": 172,
+      "per_split": {
+        "dataset_train": 120,
+        "dataset_val": 26,
+        "dataset_test": 26
+      },
+      "weight": 0.25
+    },
+    "multi_drone_hard_snr": {
+      "total": 172,
+      "per_split": {
+        "dataset_train": 120,
+        "dataset_val": 26,
+        "dataset_test": 26
+      },
+      "weight": 0.25
+    },
+    "reverb_pre_smallroom": {
+      "total": 104,
+      "per_split": {
+        "dataset_train": 73,
+        "dataset_val": 15,
+        "dataset_test": 16
+      },
+      "weight": 0.15
+    },
+    "reverb_post_hall": {
+      "total": 104,
+      "per_split": {
+        "dataset_train": 73,
+        "dataset_val": 16,
+        "dataset_test": 15
+      },
+      "weight": 0.15
+    },
+    "env_city_drone_flyby": {
+      "total": 69,
+      "per_split": {
+        "dataset_train": 48,
+        "dataset_val": 11,
+        "dataset_test": 10
+      },
+      "weight": 0.1
+    },
+    "env_rural_pass": {
+      "total": 35,
+      "per_split": {
+        "dataset_train": 25,
+        "dataset_val": 5,
+        "dataset_test": 5
+      },
+      "weight": 0.05
+    }
+  },
+  "per_split_totals": {
+    "dataset_train": 699,
+    "dataset_val": 151,
+    "dataset_test": 150
+  }
+}

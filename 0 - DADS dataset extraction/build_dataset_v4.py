@@ -21,6 +21,7 @@ def main() -> int:
     parser.add_argument('--num-workers', type=int, default=None, help='Number of worker processes to use')
     parser.add_argument('--dry-run', action='store_true', help='Do not write files; run validation only')
     parser.add_argument('--show-progress', action='store_true', help='Show progress during build')
+    parser.add_argument('--quiet', action='store_true', help='Suppress informational output')
 
     args = parser.parse_args()
 
@@ -40,7 +41,7 @@ def main() -> int:
 
     rc = run_build(str(cfg_path), out_dir=str(args.out_dir), dry_run=args.dry_run,
                    show_progress=args.show_progress, total=args.total_samples,
-                   num_workers=args.num_workers)
+                   num_workers=args.num_workers, quiet=bool(args.quiet))
     return int(rc)
 
 
